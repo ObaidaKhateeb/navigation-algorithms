@@ -22,7 +22,7 @@ def main():
     
     args = parser.parse_args()
     
-    # Validate dataset path
+    #dataset path validation 
     if not os.path.exists(args.dataset_path):
         print(f"Error: Dataset path does not exist: {args.dataset_path}")
         sys.exit(1)
@@ -31,10 +31,8 @@ def main():
         print(f"Error: Dataset path is not a directory: {args.dataset_path}")
         sys.exit(1)
     
-    # Print header
     print("=" * 70)
     print("Visual Odometry - Drone Trajectory Estimation")
-    print("Assignment 2 - Epipolar Visual Odometry")
     print("=" * 70)
     print(f"\nDataset: {args.dataset_path}")
     print(f"Feature detector: {'SIFT' if args.sift else 'ORB'}")
@@ -44,23 +42,17 @@ def main():
     print()
     
     try:
-        # Initialize Visual Odometry system
         print("Initializing Visual Odometry system...")
         vo = VisualOdometry(args.dataset_path, use_sift=args.sift)
         
-        # Load images
-        vo.load_images()
-        
-        # Run with visualization
-        visualizer = VOVisualizer(vo)
+        vo.load_images() #image loading
+
+        visualizer = VOVisualizer(vo) #initiallizing visualizer
         
         if args.realtime:
             print("\n" + "=" * 70)
-            print("REAL-TIME MODE")
             print("=" * 70)
             print("The system will process frames one by one and display:")
-            print("  - Window 1: Current frame with detected keypoints")
-            print("  - Window 2: 3D trajectory visualization (Pangolin)")
             print("\nControls:")
             print("  - Mouse: Rotate and zoom the 3D view")
             print("  - ESC or 'q': Quit")
@@ -68,11 +60,8 @@ def main():
             visualizer.run_realtime(delay_ms=args.delay)
         else:
             print("\n" + "=" * 70)
-            print("BATCH MODE")
             print("=" * 70)
             print("The system will first process all frames, then display:")
-            print("  - Window 1: Frames with keypoints (cycling)")
-            print("  - Window 2: Complete 3D trajectory (Pangolin)")
             print("\nControls:")
             print("  - Mouse: Rotate and zoom the 3D view")
             print("  - ESC or 'q': Quit")

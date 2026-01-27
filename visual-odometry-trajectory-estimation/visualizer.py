@@ -83,7 +83,7 @@ class VOVisualizer:
     
     def run_realtime(self, delay_ms=100):
         print("\n" + "="*60)
-        print("Starting Real-time Visual Odometry")
+        print("Starting visual odometry")
         print("="*60 + "\n")
         
         self.vo.frames[0].extract_features(self.vo.detector)
@@ -111,13 +111,13 @@ class VOVisualizer:
             self.update_3d_plot()
             plt.pause(delay_ms / 1000.0)
         
-        print("\nReal-time processing complete!")
+        print("\nProcessing complete!")
         plt.ioff()
         plt.show()
     
     def run_batch(self):
         print("\n" + "="*60)
-        print("Starting Batch Visual Odometry")
+        print("Starting visual odometry")
         print("="*60 + "\n")
         
         self.vo.run()
@@ -127,7 +127,7 @@ class VOVisualizer:
                 position = frame.pose[:3, 3]
                 self.trajectory_points.append(position.copy())
         
-        print("\nBatch processing complete!")
+        print("\nProcessing complete!")
         
         last_frame = self.vo.frames[-1]
         self.show_keypoints(last_frame, last_frame.keypoints)
@@ -135,12 +135,3 @@ class VOVisualizer:
         
         plt.ioff()
         plt.show()
-
-
-def visualize_vo(vo_system, realtime=False, delay_ms=100):
-    visualizer = VOVisualizer(vo_system)
-    
-    if realtime:
-        visualizer.run_realtime(delay_ms=delay_ms)
-    else:
-        visualizer.run_batch()
