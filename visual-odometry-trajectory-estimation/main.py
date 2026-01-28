@@ -3,7 +3,6 @@ import sys
 import os
 import argparse
 from visual_odometry import VisualOdometry
-from visualizer import VOVisualizer
 
 
 def main():    
@@ -19,6 +18,8 @@ def main():
                        help='Use SIFT features instead of ORB')
     parser.add_argument('--delay', type=int, default=100,
                        help='Delay between frames in milliseconds (real-time mode only)')
+    parser.add_argument('--matplotlib', action='store_true',
+                       help='Use matplotlib instead of Pangolin for visualization')
     
     args = parser.parse_args()
     
@@ -37,6 +38,7 @@ def main():
     print(f"\nDataset: {args.dataset_path}")
     print(f"Feature detector: {'SIFT' if args.sift else 'ORB'}")
     print(f"Mode: {'Real-time' if args.realtime else 'Batch'}")
+    print(f"Visualizer: {'matplotlib' if args.matplotlib else 'Pangolin'}")
     if args.realtime:
         print(f"Frame delay: {args.delay}ms")
     print()
@@ -46,6 +48,12 @@ def main():
         vo = VisualOdometry(args.dataset_path, use_sift=args.sift)
         
         vo.load_images() #image loading
+
+        #import appropriate visualizer
+        if args.matplotlib:
+            from visualizer_matplotlib import VOVisualizer
+        else:
+            from visualizer import VOVisualizer
 
         visualizer = VOVisualizer(vo) #initiallizing visualizer
         
