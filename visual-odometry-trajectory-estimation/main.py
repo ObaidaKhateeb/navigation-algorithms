@@ -12,12 +12,10 @@ def main():
     
     parser.add_argument('dataset_path', type=str,
                        help='Path to the VO_Dataset folder containing images')
-    parser.add_argument('--realtime', action='store_true',
-                       help='Run in real-time mode (process frames one by one)')
     parser.add_argument('--sift', action='store_true',
                        help='Use SIFT features instead of ORB')
-    parser.add_argument('--delay', type=int, default=100,
-                       help='Delay between frames in milliseconds (real-time mode only)')
+    parser.add_argument('--delay', type=int, default=50,
+                       help='Delay between frames in milliseconds')
     parser.add_argument('--matplotlib', action='store_true',
                        help='Use matplotlib instead of Pangolin for visualization')
     
@@ -37,10 +35,8 @@ def main():
     print("=" * 70)
     print(f"\nDataset: {args.dataset_path}")
     print(f"Feature detector: {'SIFT' if args.sift else 'ORB'}")
-    print(f"Mode: {'Real-time' if args.realtime else 'Batch'}")
     print(f"Visualizer: {'matplotlib' if args.matplotlib else 'Pangolin'}")
-    if args.realtime:
-        print(f"Frame delay: {args.delay}ms")
+    print(f"Frame delay: {args.delay}ms")
     print()
     
     try:
@@ -57,24 +53,14 @@ def main():
 
         visualizer = VOVisualizer(vo) #initiallizing visualizer
         
-        if args.realtime:
-            print("\n" + "=" * 70)
-            print("=" * 70)
-            print("The system will process frames one by one and display:")
-            print("\nControls:")
-            print("  - Mouse: Rotate and zoom the 3D view")
-            print("  - ESC or 'q': Quit")
-            print("=" * 70)
-            visualizer.run_realtime(delay_ms=args.delay)
-        else:
-            print("\n" + "=" * 70)
-            print("=" * 70)
-            print("The system will first process all frames, then display:")
-            print("\nControls:")
-            print("  - Mouse: Rotate and zoom the 3D view")
-            print("  - ESC or 'q': Quit")
-            print("=" * 70)
-            visualizer.run_batch()
+        print("\n" + "=" * 70)
+        print("=" * 70)
+        print("The system will process frames one by one and display:")
+        print("\nControls:")
+        print("  - Mouse: Rotate and zoom the 3D view")
+        print("  - ESC or 'q': Quit")
+        print("=" * 70)
+        visualizer.run_realtime(delay_ms=args.delay)
         
         print("\n" + "=" * 70)
         print("Visual Odometry completed successfully!")

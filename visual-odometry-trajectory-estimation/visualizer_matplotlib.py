@@ -11,7 +11,6 @@ class VOVisualizer:
         self.vo = vo_system
         self.trajectory_points = []
         self.current_frame_idx = 0
-        
         plt.ion()
         self.fig = plt.figure(figsize=(12, 6))
         self.ax_3d = self.fig.add_subplot(121, projection='3d')
@@ -112,26 +111,5 @@ class VOVisualizer:
             plt.pause(delay_ms / 1000.0)
         
         print("\nProcessing complete!")
-        plt.ioff()
-        plt.show()
-    
-    def run_batch(self):
-        print("\n" + "="*60)
-        print("Starting visual odometry")
-        print("="*60 + "\n")
-        
-        self.vo.run()
-        
-        for frame in self.vo.frames:
-            if frame.pose is not None:
-                position = frame.pose[:3, 3]
-                self.trajectory_points.append(position.copy())
-        
-        print("\nProcessing complete!")
-        
-        last_frame = self.vo.frames[-1]
-        self.show_keypoints(last_frame, last_frame.keypoints)
-        self.update_3d_plot()
-        
         plt.ioff()
         plt.show()
