@@ -80,7 +80,7 @@ class VOVisualizer:
         self.ax_2d.set_title(f'Frame {frame.id} - {len(keypoints)} Keypoints')
         self.ax_2d.axis('off')
     
-    def run_realtime(self, delay_ms=100):
+    def run_realtime(self, delay_ms=50):
         print("\n" + "="*60)
         print("Starting visual odometry")
         print("="*60 + "\n")

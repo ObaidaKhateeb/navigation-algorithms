@@ -91,7 +91,7 @@ class VOVisualizer:
             gl.glVertex3f(i * spacing, 0, size * spacing)
         gl.glEnd()
     
-    def run_realtime(self, delay_ms=100):
+    def run_realtime(self, delay_ms=50):
         print("\n" + "="*60)
         print("Starting visual odometry")
         print("="*60 + "\n")

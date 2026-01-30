@@ -11,11 +11,11 @@ def main():
     )
     
     parser.add_argument('dataset_path', type=str,
-                       help='Path to the VO_Dataset folder containing images')
+                       help='Path to the dataset folder containing images')
     parser.add_argument('--sift', action='store_true',
-                       help='Use SIFT features instead of ORB')
+                       help='Use SIFT instead of ORB')
     parser.add_argument('--delay', type=int, default=50,
-                       help='Delay between frames in milliseconds')
+                       help='Delay between frames in ms')
     parser.add_argument('--matplotlib', action='store_true',
                        help='Use matplotlib instead of Pangolin for visualization')
     
@@ -30,9 +30,6 @@ def main():
         print(f"Error: Dataset path is not a directory: {args.dataset_path}")
         sys.exit(1)
     
-    print("=" * 70)
-    print("Visual Odometry - Drone Trajectory Estimation")
-    print("=" * 70)
     print(f"\nDataset: {args.dataset_path}")
     print(f"Feature detector: {'SIFT' if args.sift else 'ORB'}")
     print(f"Visualizer: {'matplotlib' if args.matplotlib else 'Pangolin'}")
@@ -40,7 +37,6 @@ def main():
     print()
     
     try:
-        print("Initializing Visual Odometry system...")
         vo = VisualOdometry(args.dataset_path, use_sift=args.sift)
         
         vo.load_images() #image loading
@@ -52,14 +48,6 @@ def main():
             from visualizer import VOVisualizer
 
         visualizer = VOVisualizer(vo) #initiallizing visualizer
-        
-        print("\n" + "=" * 70)
-        print("=" * 70)
-        print("The system will process frames one by one and display:")
-        print("\nControls:")
-        print("  - Mouse: Rotate and zoom the 3D view")
-        print("  - ESC or 'q': Quit")
-        print("=" * 70)
         visualizer.run_realtime(delay_ms=args.delay)
         
         print("\n" + "=" * 70)

@@ -18,7 +18,7 @@ class Frame:
         self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
         self.keypoints = None
         self.descriptors = None
-        self.pose = np.eye(4)  # 4x4 transformation matrix [R|t; 0|1]
+        self.pose = np.eye(4)  #4x4 transformation matrix
         self.rotation_matrix = np.eye(3)
         self.translation_vector = np.zeros((3, 1))
         self.processed = False
@@ -200,15 +200,3 @@ class VisualOdometry:
                                         color=(0, 255, 0), 
                                         flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         return img_with_kp
-
-#for testing only 
-# if __name__ == "__main__":
-#     # Example usage
-#     dataset_path = "/Dataset_VO"    
-#     vo = VisualOdometry(dataset_path, use_sift=False)    
-#     vo.load_images()    
-#     vo.run()    
-#     trajectory = vo.get_trajectory()
-#     print(f"\nFinal trajectory shape: {trajectory.shape}")
-#     print(f"Start position: {trajectory[0]}")
-#     print(f"End position: {trajectory[-1]}")
