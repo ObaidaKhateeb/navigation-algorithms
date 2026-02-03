@@ -93,7 +93,7 @@ class VOVisualizer:
         print("Starting visual odometry")
         print("="*60 + "\n")
         
-        self.vo.frames[0].extract_features(self.vo.detector)
+        self.vo.frames[0].extract_features(self.vo.detector, self.vo.feature_type)
         initial_position = self.vo.current_translation.flatten()
         self.trajectory_points.append(initial_position.copy())
         

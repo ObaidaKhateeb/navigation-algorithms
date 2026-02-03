@@ -22,11 +22,18 @@ class Frame:
         self.rotation_matrix = np.eye(3)
         self.translation_vector = np.zeros((3, 1))
         self.processed = False
+        self.feature_type = None
         self.timestamp = time.time()
         
-    def extract_features(self, detector):
+    def extract_features(self, detector, feature_type):
         self.keypoints, self.descriptors = detector.detectAndCompute(self.gray, None)
         self.processed = True
+        self.feature_type = feature_type
+        if self.descriptors is not None:
+            if feature_type == "sift":
+                self.descriptors = self.descriptors.astype(np.float32)
+            else:  # "orb"
+                self.descriptors = self.descriptors.astype(np.uint8)
         
     def update_pose(self, rotation: np.ndarray, translation: np.ndarray):
         self.rotation_matrix = rotation.copy()
@@ -42,6 +49,8 @@ class VisualOdometry:
         self.dataset_path = dataset_path
         self.frames: List[Frame] = []
         self.trajectory = []  #list of camera positions
+        self.use_sift = use_sift
+        self.feature_type = "sift" if use_sift else "orb"
         
         #Feature detector
         if use_sift:
@@ -103,6 +112,11 @@ class VisualOdometry:
     
     def match_features(self, frame1: Frame, frame2: Frame, 
                       ratio_threshold: float = 0.75) -> Tuple[np.ndarray, np.ndarray]:
+        
+        if frame1.descriptors is None or frame2.descriptors is None:
+            print("Warning: No descriptors found in one of the frames")
+            return np.array([]), np.array([])
+        
         #match descriptors
         matches = self.matcher.knnMatch(frame1.descriptors, frame2.descriptors, k=2)
         
@@ -145,10 +159,11 @@ class VisualOdometry:
         return R, t
     
     def process_frame_pair(self, frame1: Frame, frame2: Frame):
-        if not frame1.processed:
-            frame1.extract_features(self.detector)
-        if not frame2.processed:
-            frame2.extract_features(self.detector)
+        if (not frame1.processed) or (frame1.feature_type != self.feature_type):
+            frame1.extract_features(self.detector, self.feature_type)
+
+        if (not frame2.processed) or (frame2.feature_type != self.feature_type):
+            frame2.extract_features(self.detector, self.feature_type)
         
         #match features
         pts1, pts2 = self.match_features(frame1, frame2)
