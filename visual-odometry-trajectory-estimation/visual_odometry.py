@@ -5,7 +5,7 @@ import glob
 import os
 from typing import List, Tuple, Optional
 import time
-
+from scipy.signal import savgol_filter
 
 class Frame:
     def __init__(self, image_path: str, frame_id: int):
@@ -210,3 +210,17 @@ class VisualOdometry:
                                         color=(0, 255, 0), 
                                         flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         return img_with_kp
+
+    def smooth_trajectory(self, window_length=11, polyorder=3):
+        if len(self.trajectory) < window_length:
+            print(f"Warning: Trajectory too short for smoothing (need at least {window_length} points)")
+            return np.array(self.trajectory)
+        
+        trajectory_array = np.array(self.trajectory)
+        
+        smoothed_trajectory = np.zeros_like(trajectory_array)
+        smoothed_trajectory[:, 0] = savgol_filter(trajectory_array[:, 0], window_length, polyorder)
+        smoothed_trajectory[:, 1] = savgol_filter(trajectory_array[:, 1], window_length, polyorder)
+        smoothed_trajectory[:, 2] = savgol_filter(trajectory_array[:, 2], window_length, polyorder)
+        
+        return smoothed_trajectory

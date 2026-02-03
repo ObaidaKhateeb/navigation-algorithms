@@ -47,19 +47,27 @@ class VOVisualizer:
         if len(self.trajectory_points) > 0:
             trajectory = np.array(self.trajectory_points)
             
-            self.ax_3d.plot3D(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
-                             'b-', linewidth=2, label='Trajectory')
+            if len(self.trajectory_points) >= 11:
+                smoothed = self.vo.smooth_trajectory(window_length=11, polyorder=2)
+                self.ax_3d.plot3D(smoothed[:, 0], smoothed[:, 1], smoothed[:, 2], 
+                                'b-', linewidth=2, label='Smoothed Trajectory')
+                current_pos = smoothed[-1]
+            else:
+                self.ax_3d.plot3D(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
+                                'b-', linewidth=2, label='Trajectory')
+                current_pos = trajectory[-1]
+            
             self.ax_3d.scatter(trajectory[0, 0], trajectory[0, 1], trajectory[0, 2], 
-                              c='green', s=100, marker='o', label='Start')
+                            c='green', s=100, marker='o', label='Start')
             
             if len(trajectory) > 1:
-                self.ax_3d.scatter(trajectory[-1, 0], trajectory[-1, 1], trajectory[-1, 2], 
-                                  c='red', s=100, marker='o', label='Current')
-                self.draw_camera(trajectory[-1], self.vo.current_rotation, scale=0.3, color='red')
+                self.ax_3d.scatter(current_pos[0], current_pos[1], current_pos[2], 
+                                c='red', s=100, marker='o', label='Current')
+                self.draw_camera(current_pos, self.vo.current_rotation, scale=0.3, color='red')
             
             max_range = np.array([trajectory[:, 0].max() - trajectory[:, 0].min(),
-                                 trajectory[:, 1].max() - trajectory[:, 1].min(),
-                                 trajectory[:, 2].max() - trajectory[:, 2].min()]).max() / 2.0
+                                trajectory[:, 1].max() - trajectory[:, 1].min(),
+                                trajectory[:, 2].max() - trajectory[:, 2].min()]).max() / 2.0
             
             mid_x = (trajectory[:, 0].max() + trajectory[:, 0].min()) * 0.5
             mid_y = (trajectory[:, 1].max() + trajectory[:, 1].min()) * 0.5

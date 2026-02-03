@@ -131,7 +131,19 @@ class VOVisualizer:
             
             if len(self.trajectory_points) > 1:
                 trajectory_array = np.array(self.trajectory_points)
-                self.draw_trajectory(trajectory_array)
+
+                gl.glColor3f(0.5, 0.5, 0.5)
+                gl.glLineWidth(1)
+                gl.glBegin(gl.GL_LINE_STRIP)
+                for pos in trajectory_array:
+                    gl.glVertex3f(pos[0], pos[1], pos[2])
+                gl.glEnd()
+                
+                if len(self.trajectory_points) >= 11:
+                    smoothed = self.vo.smooth_trajectory(window_length=11, polyorder=2)
+                    self.draw_trajectory(smoothed)
+                else:
+                    self.draw_trajectory(trajectory_array)
                 
                 if self.current_frame_idx > 0 and self.current_frame_idx <= len(self.vo.frames):
                     current_frame = self.vo.frames[self.current_frame_idx - 1]
