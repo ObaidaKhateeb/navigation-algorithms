@@ -13,6 +13,7 @@ class VOVisualizer:
         self.current_frame_idx = 0
         self.window_width = 1280
         self.window_height = 720
+        self.latest_matches_img = None
         
     def init_pangolin(self):
         pangolin.CreateWindowAndBind('Visual Odometry', self.window_width, self.window_height)
@@ -115,7 +116,7 @@ class VOVisualizer:
                 
                 print(f"Processing frame pair {self.current_frame_idx+1}/{len(self.vo.frames)-1}...")
                 
-                self.vo.process_frame_pair(frame1, frame2)
+                matches_img = self.vo.process_frame_pair(frame1, frame2)
 
                 position = self.vo.current_translation.flatten()
                 self.trajectory_points.append(position.copy())
@@ -125,6 +126,11 @@ class VOVisualizer:
                                                flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
                 display_img = cv2.resize(img_with_kp, (640, 480))
                 cv2.imshow('Current Frame - Keypoints', display_img)
+
+                #feature matches
+                if self.latest_matches_img is not None:
+                    display_matches = cv2.resize(self.latest_matches_img, (1280, 360))
+                    cv2.imshow('Feature Matches', display_matches)
                 
                 self.current_frame_idx += 1
                 time.sleep(delay_ms / 1000.0)

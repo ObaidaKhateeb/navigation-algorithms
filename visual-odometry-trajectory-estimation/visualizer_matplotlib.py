@@ -12,10 +12,14 @@ class VOVisualizer:
         self.trajectory_points = []
         self.current_frame_idx = 0
         plt.ion()
-        self.fig = plt.figure(figsize=(12, 6))
-        self.ax_3d = self.fig.add_subplot(121, projection='3d')
-        self.ax_2d = self.fig.add_subplot(122)
+        self.fig = plt.figure(figsize=(12, 5.5))
+        from matplotlib.gridspec import GridSpec
+        gs = GridSpec(2, 2, figure=self.fig, width_ratios=[1, 1], height_ratios=[1, 1])
+        self.ax_3d = self.fig.add_subplot(gs[:, 0], projection='3d')
+        self.ax_keypoints = self.fig.add_subplot(gs[0, 1])
+        self.ax_matches = self.fig.add_subplot(gs[1, 1])
         self.setup_3d_plot()
+        self.latest_matches_img = None
         
     def setup_3d_plot(self):
         self.ax_3d.set_xlabel('X (Right/Left)')
@@ -80,13 +84,20 @@ class VOVisualizer:
     
     def show_keypoints(self, frame, keypoints):
         img_with_kp = cv2.drawKeypoints(frame.image, keypoints, None, color=(0, 255, 0),
-                                       flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+                                    flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         img_rgb = cv2.cvtColor(img_with_kp, cv2.COLOR_BGR2RGB)
         
-        self.ax_2d.cla()
-        self.ax_2d.imshow(img_rgb)
-        self.ax_2d.set_title(f'Frame {frame.id} - {len(keypoints)} Keypoints')
-        self.ax_2d.axis('off')
+        self.ax_keypoints.cla()
+        self.ax_keypoints.imshow(img_rgb)
+        self.ax_keypoints.set_title(f'Frame {frame.id} - {len(keypoints)} Keypoints')
+        self.ax_keypoints.axis('off')
+    
+    def show_matches(self, matches_img):
+        if matches_img is not None:
+            matches_rgb = cv2.cvtColor(matches_img, cv2.COLOR_BGR2RGB)
+            self.ax_matches.cla()
+            self.ax_matches.imshow(matches_rgb)
+            self.ax_matches.axis('off')
     
     def run_realtime(self, delay_ms=50):
         print("\n" + "="*60)
@@ -99,6 +110,7 @@ class VOVisualizer:
         
         self.show_keypoints(self.vo.frames[0], self.vo.frames[0].keypoints)
         self.update_3d_plot()
+        plt.tight_layout()
         plt.pause(0.1)
         
         for i in range(len(self.vo.frames) - 1):
@@ -110,12 +122,17 @@ class VOVisualizer:
             
             print(f"Processing frame pair {i+1}/{len(self.vo.frames)-1}...")
             
-            self.vo.process_frame_pair(frame1, frame2)
+            matches_img = self.vo.process_frame_pair(frame1, frame2)
+            
+            if matches_img is not None:
+                self.latest_matches_img = matches_img
 
             position = self.vo.current_translation.flatten()
             self.trajectory_points.append(position.copy())
             self.show_keypoints(frame2, frame2.keypoints)
+            self.show_matches(self.latest_matches_img)
             self.update_3d_plot()
+            plt.tight_layout()
             plt.pause(delay_ms / 1000.0)
         
         print("\nProcessing complete!")

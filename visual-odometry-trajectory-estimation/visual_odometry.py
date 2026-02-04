@@ -57,7 +57,7 @@ class VisualOdometry:
             self.detector = cv2.SIFT_create(nfeatures=2000)
             self.matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
         else:
-            self.detector = cv2.ORB_create(nfeatures=200)
+            self.detector = cv2.ORB_create(nfeatures=100)
             self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         
         #The camera intrinsic matrix that will be estimated from image dimensions
@@ -105,11 +105,11 @@ class VisualOdometry:
         return K
     
     def match_features(self, frame1: Frame, frame2: Frame, 
-                      ratio_threshold: float = 0.75) -> Tuple[np.ndarray, np.ndarray]:
+                      ratio_threshold: float = 0.75) -> Tuple[np.ndarray, np.ndarray, List]:
         
         if frame1.descriptors is None or frame2.descriptors is None:
             print("Warning: No descriptors found in one of the frames")
-            return np.array([]), np.array([])
+            return np.array([]), np.array([]), []
         
         #match descriptors
         matches = self.matcher.knnMatch(frame1.descriptors, frame2.descriptors, k=2)
@@ -124,13 +124,13 @@ class VisualOdometry:
         
         if len(good_matches) < 8:
             print(f"Warning: Only {len(good_matches)} good matches found")
-            return np.array([]), np.array([])
+            return np.array([]), np.array([]), []
         
         #extracting matched keypoint coordinates
         pts1 = np.float32([frame1.keypoints[m.queryIdx].pt for m in good_matches])
         pts2 = np.float32([frame2.keypoints[m.trainIdx].pt for m in good_matches])
         
-        return pts1, pts2
+        return pts1, pts2, good_matches
     
     def compute_relative_pose(self, pts1: np.ndarray, pts2: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         #computing Essential matrix
@@ -160,18 +160,18 @@ class VisualOdometry:
             frame2.extract_features(self.detector, self.feature_type)
         
         #match features
-        pts1, pts2 = self.match_features(frame1, frame2)
+        pts1, pts2, good_matches = self.match_features(frame1, frame2)
         
         if len(pts1) < 8:
             print(f"Insufficient matches between frames {frame1.id} and {frame2.id}")
             frame2.update_pose(self.current_rotation, self.current_translation) #keep previous pose
-            return
+            return None
         
         R_rel, t_rel = self.compute_relative_pose(pts1, pts2) #computing relative pose
         
         # updating accumulate pose by: New pose = Current pose * Relative pose
-        self.current_translation = self.current_translation + self.current_rotation @ t_rel
-        self.current_rotation = R_rel @ self.current_rotation
+        self.current_rotation = R_rel @ self.current_rotation  
+        self.current_translation = R_rel @ self.current_translation + t_rel
         
         #updating frame pose
         frame2.update_pose(self.current_rotation, self.current_translation)
@@ -181,6 +181,15 @@ class VisualOdometry:
         self.trajectory.append(position.copy())
         
         print(f"Frame {frame2.id}: Position = [{position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}]")
+
+        #matches visualization
+        if len(good_matches) > 0:
+            matches_img = cv2.drawMatches(frame1.image, frame1.keypoints,
+                                          frame2.image, frame2.keypoints,
+                                          good_matches, None,
+                                          flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+            return matches_img
+        return None
     
     def run(self):
         if len(self.frames) < 2:
