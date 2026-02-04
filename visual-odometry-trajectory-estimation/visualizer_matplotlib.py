@@ -18,12 +18,12 @@ class VOVisualizer:
         self.setup_3d_plot()
         
     def setup_3d_plot(self):
-        self.ax_3d.set_xlabel('X (Left/Right)')
-        self.ax_3d.set_ylabel('Y (Forward/Backward)')
-        self.ax_3d.set_zlabel('Z (Up/Down)')
+        self.ax_3d.set_xlabel('X (Right/Left)')
+        self.ax_3d.set_ylabel('Y (Up/Down)')
+        self.ax_3d.set_zlabel('Z (Forward/Backward)')
         self.ax_3d.set_title('3D Trajectory')
         self.ax_3d.grid(True)
-        self.ax_3d.view_init(elev=20, azim=-45)
+        self.ax_3d.view_init(elev=20, azim=45)
         
     def draw_camera(self, position, rotation, scale=0.5, color='red'):
         frustum = np.array([[0,0,0], [-0.5,-0.5,1], [0.5,-0.5,1], [0.5,0.5,1], [-0.5,0.5,1]]) * scale

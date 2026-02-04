@@ -57,17 +57,11 @@ class VisualOdometry:
             self.detector = cv2.SIFT_create(nfeatures=2000)
             self.matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
         else:
-            self.detector = cv2.ORB_create(nfeatures=3000)
+            self.detector = cv2.ORB_create(nfeatures=200)
             self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         
         #The camera intrinsic matrix that will be estimated from image dimensions
         self.K = None
-
-        self.T_coord = np.array([
-            [1,  0,  0],
-            [0,  0,  1],
-            [0, -1,  0]
-        ], dtype=np.float64)
 
         #current pos
         self.current_pose = np.eye(4)
@@ -174,10 +168,6 @@ class VisualOdometry:
             return
         
         R_rel, t_rel = self.compute_relative_pose(pts1, pts2) #computing relative pose
-        
-        # Transform coordinate system to desired (X-right, Y-forward, Z-up)
-        R_rel = self.T_coord @ R_rel @ self.T_coord.T
-        t_rel = self.T_coord @ t_rel
         
         # updating accumulate pose by: New pose = Current pose * Relative pose
         self.current_translation = self.current_translation + self.current_rotation @ t_rel
