@@ -84,10 +84,10 @@ class VOVisualizer:
         gl.glLineWidth(1)
         gl.glBegin(gl.GL_LINES)
         for i in range(-size, size + 1):
-            gl.glVertex3f(-size * spacing, i * spacing, 0)
-            gl.glVertex3f(size * spacing, i * spacing, 0)
-            gl.glVertex3f(i * spacing, -size * spacing, 0)
-            gl.glVertex3f(i * spacing, size * spacing, 0)
+            gl.glVertex3f(-size * spacing, 0, i * spacing)
+            gl.glVertex3f(size * spacing, 0, i * spacing)
+            gl.glVertex3f(i * spacing, 0, -size * spacing)
+            gl.glVertex3f(i * spacing, 0, size * spacing)
         gl.glEnd()
     
     def run_realtime(self, delay_ms=50):
