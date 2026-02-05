@@ -12,6 +12,8 @@ class Frame:
         self.keypoints = None
         self.descriptors = None
         self.pose = np.eye(4)
+        self.rotation_matrix = np.eye(3)
+        self.translation_vector = np.zeros((3, 1))
         self.processed = False
 
 class VisualOdometry:
@@ -27,7 +29,7 @@ class VisualOdometry:
             self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         self.frames = []
         self.trajectory = []
-        self.K = None
+        self.k = None
 
     def extract_features(self, frame):
         detector = self.sift if self.use_sift else self.orb
@@ -59,14 +61,14 @@ class VisualOdometry:
             return None, None, matches
 
         # 6) Compute Essential matrix
-        E, mask = cv2.findEssentialMat(
-            pts1, pts2, self.K,
+        essential_matrix, mask = cv2.findEssentialMat(
+            pts1, pts2, self.k,
             method=cv2.RANSAC,
             prob=0.999,
             threshold=1.0
         )
 
-        if E is None or mask is None:
+        if essential_matrix is None or mask is None:
             return None, None, matches
 
         # 7) Recover pose using inliers
@@ -77,9 +79,9 @@ class VisualOdometry:
         if pts1_in.shape[0] < 8:
             return None, None, matches
 
-        _, R, t, _ = cv2.recoverPose(E, pts1_in, pts2_in, self.K)
+        _, rotation, translation, _ = cv2.recoverPose(essential_matrix, pts1_in, pts2_in, self.k)
 
-        return R, t, matches
+        return rotation, translation, matches
 
     def smooth_traj(self, traj):
         try:
@@ -99,12 +101,12 @@ class VisualOdometry:
             img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
             frame = Frame(img, i)
 
-            if self.K is None:
+            if self.k is None:
                 h, w = img.shape
                 fx = fy = 0.8 * w
                 cx = w / 2
                 cy = h / 2
-                self.K = np.array([[fx, 0, cx],
+                self.k = np.array([[fx, 0, cx],
                                    [0, fy, cy],
                                    [0,  0,  1]])
 
@@ -122,17 +124,20 @@ class VisualOdometry:
                 continue
 
             prev = self.frames[i - 1]
-            R, t, matches = self.estimate_motion(prev, frame)
+            rotation, translation, matches = self.estimate_motion(prev, frame)
 
             # if pose estimation failed, skip this frame
-            if R is None or t is None:
+            if rotation is None or translation is None:
                 continue
 
-            T = np.eye(4)
-            T[:3, :3] = R
-            T[:3, 3] = t.flatten()
+            frame.rotation_matrix = rotation
+            frame.translation_vector = translation
 
-            frame.pose = prev.pose @ np.linalg.inv(T)
+            t_matrix = np.eye(4)
+            t_matrix[:3, :3] = frame.rotation_matrix
+            t_matrix[:3, 3] =  frame.translation_vector.flatten()
+
+            frame.pose = prev.pose @ np.linalg.inv(t_matrix)
 
             pos = frame.pose[:3, 3]
             self.trajectory.append(pos)
@@ -325,8 +330,6 @@ if __name__ == "__main__":
         glob.glob(os.path.join(image_dir, "*.jpeg"))
     )
 
-    if len(images) == 0:
-        raise RuntimeError("No images found in directory")
     if len(images) == 0:
         raise RuntimeError("No images found in directory")
     
