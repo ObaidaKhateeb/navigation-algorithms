@@ -55,7 +55,7 @@ class VisualOdometry:
         #Essential matrix computation 
         if pts1.shape[0] < 8 or pts2.shape[0] < 8:
             return None, None, matches
-        essential_matrix, mask = cv2.findEssentialMat(pts1, pts2, self.k, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+        essential_matrix, mask = cv2.findEssentialMat(pts1, pts2, self.k, method=cv2.LMEDS, prob=0.999, threshold=1.0)
         if essential_matrix is None or mask is None:
             return None, None, matches
 
@@ -122,7 +122,7 @@ class VisualOdometry:
 
             t_matrix = np.eye(4)
             t_matrix[:3, :3] = frame.rotation_matrix
-            t_matrix[:3, 3] =  frame.translation_vector.flatten()
+            t_matrix[:3, 3] = frame.translation_vector.flatten()
 
             frame.pose = prev.pose @ np.linalg.inv(t_matrix)
 
@@ -131,7 +131,7 @@ class VisualOdometry:
 
             #keypoints/matches window
             vis = cv2.drawMatches(prev.image, prev.keypoints, frame.image, frame.keypoints, matches[:50], None)
-            cv2.imshow("Keypoints / Matches", vis)
+            cv2.imshow("Top Matches", vis)
 
             #trajectory window
             traj = self.smooth_traj(np.array(self.trajectory))
