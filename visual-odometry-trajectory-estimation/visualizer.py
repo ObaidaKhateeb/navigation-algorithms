@@ -1,158 +1,102 @@
 import numpy as np
-import cv2
-import pypangolin as pangolin
-import OpenGL.GL as gl
-from typing import List, Tuple
-import time
 
+class BaseVisualizer:
+    def update(self, traj: np.ndarray):
+        pass
+    def close(self):
+        pass
 
-class VOVisualizer:    
-    def __init__(self, vo_system):
-        self.vo = vo_system
-        self.trajectory_points = []
-        self.current_frame_idx = 0
-        self.window_width = 1280
-        self.window_height = 720
-        self.latest_matches_img = None
-        
-    def init_pangolin(self):
-        pangolin.CreateWindowAndBind('Visual Odometry', self.window_width, self.window_height)
+class PangolinVisualizer(BaseVisualizer):
+    def __init__(self):
+        import pypangolin as pangolin
+        import OpenGL.GL as gl
+        self.pangolin = pangolin
+        self.gl = gl
+        self.closed = False
+        pangolin.CreateWindowAndBind("Trajectory (Pangolin)", 1024, 768)
         gl.glEnable(gl.GL_DEPTH_TEST)
-        
-        self.scam = pangolin.OpenGlRenderState(
-            pangolin.ProjectionMatrix(self.window_width, self.window_height, 420, 420,
-                                     self.window_width // 2, self.window_height // 2, 0.1, 10000),
-            pangolin.ModelViewLookAt(0, -50, -50, 0, 0, 0, pangolin.AxisY)
-        )
-        
-        self.handler = pangolin.Handler3D(self.scam)
-        self.dcam = pangolin.CreateDisplay()
-        self.dcam.SetBounds(pangolin.Attach(0), pangolin.Attach(1), 
-                           pangolin.Attach(0), pangolin.Attach(1), 
-                           -self.window_width / self.window_height)
-        self.dcam.SetHandler(self.handler)
-        
-    def draw_camera(self, pose, scale=1.0):
-        w = scale * 0.5
-        h = scale * 0.3
-        z = scale * 0.6
-        
-        vertices = np.array([
-            [0, 0, 0],
-            [-w, -h, z],
-            [w, -h, z],
-            [w, h, z],
-            [-w, h, z],
-        ])
-        
-        R = pose[:3, :3]
-        t = pose[:3, 3]
-        vertices_world = (R @ vertices.T).T + t
-        
-        gl.glColor3f(0.0, 0.5, 1.0)
-        gl.glLineWidth(2)
-        
-        gl.glBegin(gl.GL_LINES)
-        for i in range(1, 5):
-            gl.glVertex3f(*vertices_world[0])
-            gl.glVertex3f(*vertices_world[i])
-        
-        for i in range(1, 5):
-            gl.glVertex3f(*vertices_world[i])
-            gl.glVertex3f(*vertices_world[(i % 4) + 1])
-        gl.glEnd()
-        
-    def draw_trajectory(self, positions):
-        if len(positions) < 2:
+        self.s_cam = pangolin.OpenGlRenderState(pangolin.ProjectionMatrix(1024, 768, 500, 500, 512, 389, 0.1, 1000),
+            pangolin.ModelViewLookAt(0, -9, -30, 0, 0, 0, 0, -1, 0))
+        self.handler = pangolin.Handler3D(self.s_cam)
+        self.d_cam = pangolin.CreateDisplay()
+        self.d_cam.SetBounds(pangolin.Attach(0.0),pangolin.Attach(1.0),pangolin.Attach(0.0), pangolin.Attach(1.0),-1024.0 / 768.0)
+        self.d_cam.SetHandler(self.handler)
+
+    def update(self, traj: np.ndarray):
+        pangolin = self.pangolin
+        gl = self.gl
+
+        if pangolin.ShouldQuit():
+            self.closed = True
             return
-        
+
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+
+        self.d_cam.Activate(self.s_cam)
+        self.draw_grid_and_axes()
+
+        if traj.shape[0] >= 2:
+            self.update_cam_view(traj)
+            gl.glColor3f(1.0, 1.0, 0.0)
+            gl.glLineWidth(3)
+            gl.glBegin(gl.GL_LINE_STRIP)
+            for p in traj:
+                gl.glVertex3f(float(p[0]), float(p[1]), float(p[2]))
+            gl.glEnd()
+
+        #coloring the start and end points 
+        gl.glPointSize(10)
         gl.glColor3f(0.0, 1.0, 0.0)
-        gl.glLineWidth(3)
-        
-        gl.glBegin(gl.GL_LINE_STRIP)
-        for pos in positions:
-            gl.glVertex3f(pos[0], pos[1], pos[2])
-        gl.glEnd()
-        
-        gl.glPointSize(5)
         gl.glBegin(gl.GL_POINTS)
-        for pos in positions:
-            gl.glVertex3f(pos[0], pos[1], pos[2])
+        gl.glVertex3f(float(traj[0][0]), float(traj[0][1]), float(traj[0][2]))
         gl.glEnd()
-        
-    def draw_grid(self, size=50, spacing=5.0):
-        gl.glColor3f(0.3, 0.3, 0.3)
-        gl.glLineWidth(1)
-        gl.glBegin(gl.GL_LINES)
-        for i in range(-size, size + 1):
-            gl.glVertex3f(-size * spacing, 0, i * spacing)
-            gl.glVertex3f(size * spacing, 0, i * spacing)
-            gl.glVertex3f(i * spacing, 0, -size * spacing)
-            gl.glVertex3f(i * spacing, 0, size * spacing)
+        gl.glColor3f(1.0, 0.0, 0.0)
+        gl.glBegin(gl.GL_POINTS)
+        gl.glVertex3f(float(traj[-1][0]), float(traj[-1][1]), float(traj[-1][2]))
         gl.glEnd()
-    
-    def run_realtime(self, delay_ms=50):
-        print("\n" + "="*60)
-        print("Starting visual odometry")
-        print("="*60 + "\n")
-        
-        self.init_pangolin()
-        
-        self.vo.frames[0].extract_features(self.vo.detector, self.vo.feature_type)
-        initial_position = self.vo.current_translation.flatten()
-        self.trajectory_points.append(initial_position.copy())
-        
-        while not pangolin.ShouldQuit():
-            gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-            gl.glClearColor(0.95, 0.95, 0.95, 1.0)
-            
-            self.dcam.Activate(self.scam)
-            
-            self.draw_grid(size=20, spacing=5.0)
-            
-            if self.current_frame_idx < len(self.vo.frames) - 1:
-                frame1 = self.vo.frames[self.current_frame_idx]
-                frame2 = self.vo.frames[self.current_frame_idx + 1]
-                
-                print(f"Processing frame pair {self.current_frame_idx+1}/{len(self.vo.frames)-1}...")
-                
-                matches_img = self.vo.process_frame_pair(frame1, frame2)
 
-                position = self.vo.current_translation.flatten()
-                self.trajectory_points.append(position.copy())
-                
-                img_with_kp = cv2.drawKeypoints(frame2.image, frame2.keypoints, None,
-                                               color=(0, 255, 0),
-                                               flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-                display_img = cv2.resize(img_with_kp, (640, 480))
-                cv2.imshow('Current Frame - Keypoints', display_img)
+        pangolin.FinishFrame()
 
-                #feature matches
-                if self.latest_matches_img is not None:
-                    display_matches = cv2.resize(self.latest_matches_img, (1280, 360))
-                    cv2.imshow('Feature Matches', display_matches)
-                
-                self.current_frame_idx += 1
-                time.sleep(delay_ms / 1000.0)
+    #function responsibe for making the camera follow the trajectory (the last portion of it)
+    #the function created to handle the issue of the trajectory being moved outside the visible window
+    def update_cam_view(self, traj: np.ndarray):
+            num_points = min(20, traj.shape[0])
+            last_points = traj[-num_points:]
+            center = np.mean(last_points, axis=0) #center of the recently added points
+            self.s_cam.Follow(self.pangolin.OpenGlMatrix.Translate(center[0], center[1], center[2]))
+
+    def draw_grid_and_axes(self):
+            gl = self.gl
             
-            if len(self.trajectory_points) > 1:
-                trajectory_array = np.array(self.trajectory_points)
-                
-                if len(self.trajectory_points) >= 11:
-                    smoothed = self.vo.smooth_trajectory(window_length=11, polyorder=2)
-                    self.draw_trajectory(smoothed)
-                else:
-                    self.draw_trajectory(trajectory_array)
-                
-                if self.current_frame_idx > 0 and self.current_frame_idx <= len(self.vo.frames):
-                    current_frame = self.vo.frames[self.current_frame_idx - 1]
-                    self.draw_camera(current_frame.pose, scale=2.0)
+            #grid draw
+            gl.glColor3f(0.3, 0.3, 0.3)
+            gl.glLineWidth(1)
+            grid_size = 50
+            grid_step = 5
+            for i in range(-grid_size, grid_size + 1, grid_step):
+                gl.glBegin(gl.GL_LINES)
+                gl.glVertex3f(float(i), 0.0, float(-grid_size))
+                gl.glVertex3f(float(i), 0.0, float(grid_size))
+                gl.glEnd()
+                gl.glBegin(gl.GL_LINES)
+                gl.glVertex3f(float(-grid_size), 0.0, float(i))
+                gl.glVertex3f(float(grid_size), 0.0, float(i))
+                gl.glEnd()
             
-            pangolin.FinishFrame()
-            
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 27:
-                break
-        
-        cv2.destroyAllWindows()
-        print("\nProcessing complete!")
+            #axes draw 
+            gl.glLineWidth(3)
+            gl.glColor3f(1.0, 1.0, 1.0)
+            gl.glBegin(gl.GL_LINES)
+            gl.glVertex3f(0.0, 0.0, 0.0)
+            gl.glVertex3f(10.0, 0.0, 0.0)
+            gl.glEnd()
+            gl.glColor3f(1.0, 1.0, 1.0)
+            gl.glBegin(gl.GL_LINES)
+            gl.glVertex3f(0.0, 0.0, 0.0)
+            gl.glVertex3f(0.0, 10.0, 0.0)
+            gl.glEnd()
+            gl.glColor3f(1.0, 1.0, 1.0)
+            gl.glBegin(gl.GL_LINES)
+            gl.glVertex3f(0.0, 0.0, 0.0)
+            gl.glVertex3f(0.0, 0.0, 10.0)
+            gl.glEnd()

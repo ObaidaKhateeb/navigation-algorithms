@@ -1,240 +1,153 @@
-#!/usr/bin/env python3
 import cv2
 import numpy as np
-import glob
-import os
-from typing import List, Tuple, Optional
-import time
 from scipy.signal import savgol_filter
 
 class Frame:
-    def __init__(self, image_path: str, frame_id: int):
-        self.id = frame_id
-        self.image_path = image_path
-        self.image = cv2.imread(image_path)
-        if self.image is None:
-            raise ValueError(f"Failed to load image: {image_path}")
-        
-        self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
+    def __init__(self, img, idx):
+        self.id = idx
+        self.image = img
         self.keypoints = None
         self.descriptors = None
-        self.pose = np.eye(4)  #4x4 transformation matrix
+        self.pose = np.eye(4)
         self.rotation_matrix = np.eye(3)
         self.translation_vector = np.zeros((3, 1))
         self.processed = False
-        self.feature_type = None
-        self.timestamp = time.time()
-        
-    def extract_features(self, detector, feature_type):
-        self.keypoints, self.descriptors = detector.detectAndCompute(self.gray, None)
-        self.processed = True
-        self.feature_type = feature_type
-        if self.descriptors is not None:
-            if feature_type == "sift":
-                self.descriptors = self.descriptors.astype(np.float32)
-            else:  # "orb"
-                self.descriptors = self.descriptors.astype(np.uint8)
-        
-    def update_pose(self, rotation: np.ndarray, translation: np.ndarray):
-        self.rotation_matrix = rotation.copy()
-        self.translation_vector = translation.copy()
-        
-        #updating 4x4 transformation matrix
-        self.pose[:3, :3] = rotation
-        self.pose[:3, 3:4] = translation
-
 
 class VisualOdometry:
-    def __init__(self, dataset_path: str, use_sift: bool = False):
-        self.dataset_path = dataset_path
-        self.frames: List[Frame] = []
-        self.trajectory = []  #list of camera positions
+    def __init__(self, image_paths, visualizer, use_sift=False):
+        self.images = image_paths
         self.use_sift = use_sift
-        self.feature_type = "sift" if use_sift else "orb"
-        
-        #Feature detector
-        if use_sift:
-            self.detector = cv2.SIFT_create(nfeatures=2000)
-            self.matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+        self.orb = cv2.ORB_create(200)
+        self.sift = cv2.SIFT_create()
+        self.visualizer = visualizer
+        if self.use_sift:
+            self.matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
         else:
-            self.detector = cv2.ORB_create(nfeatures=100)
-            self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-        
-        #The camera intrinsic matrix that will be estimated from image dimensions
-        self.K = None
+            self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        self.frames = []
+        self.trajectory = []
+        self.k = None
 
-        #current pos
-        self.current_pose = np.eye(4)
-        self.current_rotation = np.eye(3)
-        self.current_translation = np.zeros((3, 1))
-        
-    def load_images(self):
-        image_files = sorted(glob.glob(os.path.join(self.dataset_path, "*.jpg")) + 
-                           glob.glob(os.path.join(self.dataset_path, "*.png")))
-        
-        if not image_files:
-            raise ValueError(f"No images found in {self.dataset_path}")
-        
-        print(f"Loading {len(image_files)} images...")
-        
-        for idx, img_path in enumerate(image_files):
-            frame = Frame(img_path, idx)
+    def extract_features(self, frame):
+        detector = self.sift if self.use_sift else self.orb
+        kp, des = detector.detectAndCompute(frame.image, None)
+        frame.keypoints = kp
+        frame.descriptors = des
+
+    def estimate_motion(self, f1, f2):
+        #ensure descriptors exists
+        if f1.descriptors is None or f2.descriptors is None:
+            return None, None, []
+
+        matches = self.matcher.match(f1.descriptors, f2.descriptors) #matching
+
+        #check if there enough matches
+        if matches is None or len(matches) < 8:
+            return None, None, []
+
+        matches = sorted(matches, key=lambda x: x.distance)
+        matches = matches[:2000]
+
+        #point arrays building
+        pts1 = np.float32([f1.keypoints[m.queryIdx].pt for m in matches]).reshape(-1, 2)
+        pts2 = np.float32([f2.keypoints[m.trainIdx].pt for m in matches]).reshape(-1, 2)
+
+        #Essential matrix computation 
+        if pts1.shape[0] < 8 or pts2.shape[0] < 8:
+            return None, None, matches
+        essential_matrix, mask = cv2.findEssentialMat(pts1, pts2, self.k, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+        if essential_matrix is None or mask is None:
+            return None, None, matches
+
+        #Pose recovering
+        inliers = mask.ravel().astype(bool)
+        pts1_in = pts1[inliers]
+        pts2_in = pts2[inliers]
+
+        if pts1_in.shape[0] < 8:
+            return None, None, matches
+
+        _, rotation, translation, _ = cv2.recoverPose(essential_matrix, pts1_in, pts2_in, self.k)
+
+        return rotation, translation, matches
+
+    def smooth_traj(self, traj):
+        try:
+            if traj.shape[0] < 12: #smaller than the window size 
+                return traj
+
+            sm = traj.copy()
+            for d in range(3):
+                sm[1:, d] = savgol_filter(traj[1:, d], window_length=11, polyorder=3, mode="interp")
+                
+            return sm
+        except Exception:
+            return traj
+
+    def run(self):
+        for i, path in enumerate(self.images):
+            img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            frame = Frame(img, i)
+
+            if self.k is None:
+                h, w = img.shape
+                fx = fy = 0.8 * w
+                cx = w / 2
+                cy = h / 2
+                self.k = np.array([[fx, 0, cx],
+                                   [0, fy, cy],
+                                   [0,  0,  1]])
+
+            self.extract_features(frame)
             self.frames.append(frame)
             
-        #Estimating the camera intrinsic matrix from the first image
-        first_frame = self.frames[0]
-        h, w = first_frame.gray.shape
-        self.K = self._estimate_intrinsic_matrix(w, h)
-        
-        print(f"Loaded {len(self.frames)} frames")
-        print(f"Image size: {w}x{h}")
-        print(f"Camera matrix K:\n{self.K}")
-        
-    def _estimate_intrinsic_matrix(self, width: int, height: int) -> np.ndarray:
-        #assuming focal length is approximately image width
-        focal_length = width
-        cx = width / 2.0
-        cy = height / 2.0
-        
-        K = np.array([
-            [focal_length, 0, cx],
-            [0, focal_length, cy],
-            [0, 0, 1]
-        ], dtype=np.float64)
-        
-        return K
-    
-    def match_features(self, frame1: Frame, frame2: Frame, 
-                      ratio_threshold: float = 0.75) -> Tuple[np.ndarray, np.ndarray, List]:
-        
-        if frame1.descriptors is None or frame2.descriptors is None:
-            print("Warning: No descriptors found in one of the frames")
-            return np.array([]), np.array([]), []
-        
-        #match descriptors
-        matches = self.matcher.knnMatch(frame1.descriptors, frame2.descriptors, k=2)
-        
-        #applying ratio test (Lowe's ratio test)
-        good_matches = []
-        for match_pair in matches:
-            if len(match_pair) == 2:
-                m, n = match_pair
-                if m.distance < ratio_threshold * n.distance:
-                    good_matches.append(m)
-        
-        if len(good_matches) < 8:
-            print(f"Warning: Only {len(good_matches)} good matches found")
-            return np.array([]), np.array([]), []
-        
-        #extracting matched keypoint coordinates
-        pts1 = np.float32([frame1.keypoints[m.queryIdx].pt for m in good_matches])
-        pts2 = np.float32([frame2.keypoints[m.trainIdx].pt for m in good_matches])
-        
-        return pts1, pts2, good_matches
-    
-    def compute_relative_pose(self, pts1: np.ndarray, pts2: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        #computing Essential matrix
-        E, mask = cv2.findEssentialMat(pts1, pts2, self.K, 
-                                       method=cv2.RANSAC, 
-                                       prob=0.999, 
-                                       threshold=1.0)
-        
-        if E is None:
-            print("Warning: Essential matrix computation failed")
-            return np.eye(3), np.zeros((3, 1))
-        
-        #using the mask for filtering the points
-        pts1_filtered = pts1[mask.ravel() == 1]
-        pts2_filtered = pts2[mask.ravel() == 1]
-        
-        #recover pose
-        _, R, t, pose_mask = cv2.recoverPose(E, pts1_filtered, pts2_filtered, self.K)
-        
-        return R, t
-    
-    def process_frame_pair(self, frame1: Frame, frame2: Frame):
-        if (not frame1.processed) or (frame1.feature_type != self.feature_type):
-            frame1.extract_features(self.detector, self.feature_type)
+            kp_img = cv2.drawKeypoints(frame.image, frame.keypoints, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+            cv2.imshow("Features (Current Frame)", kp_img)
 
-        if (not frame2.processed) or (frame2.feature_type != self.feature_type):
-            frame2.extract_features(self.detector, self.feature_type)
-        
-        #match features
-        pts1, pts2, good_matches = self.match_features(frame1, frame2)
-        
-        if len(pts1) < 8:
-            print(f"Insufficient matches between frames {frame1.id} and {frame2.id}")
-            frame2.update_pose(self.current_rotation, self.current_translation) #keep previous pose
-            return None
-        
-        R_rel, t_rel = self.compute_relative_pose(pts1, pts2) #computing relative pose
-        
-        # updating accumulate pose by: New pose = Current pose * Relative pose
-        self.current_rotation = R_rel @ self.current_rotation  
-        self.current_translation = R_rel @ self.current_translation + t_rel
-        
-        #updating frame pose
-        frame2.update_pose(self.current_rotation, self.current_translation)
-        
-        #storing position in trajectory
-        position = self.current_translation.flatten()
-        self.trajectory.append(position.copy())
-        
-        print(f"Frame {frame2.id}: Position = [{position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}]")
+            if i == 0:
+                self.trajectory.append(np.array([0.0, 0.0, 0.0]))
+                traj = self.smooth_traj(np.array(self.trajectory))
+                self.visualizer.update(traj)
+                continue
 
-        #matches visualization
-        if len(good_matches) > 0:
-            matches_img = cv2.drawMatches(frame1.image, frame1.keypoints,
-                                          frame2.image, frame2.keypoints,
-                                          good_matches, None,
-                                          flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-            return matches_img
-        return None
-    
-    def run(self):
-        if len(self.frames) < 2:
-            raise ValueError("Need at least 2 frames to run visual odometry")
-        
-        print("\nStarting Visual Odometry processing...")
-        print("=" * 60)
-        
-        #initializing first frame at origin
-        self.frames[0].extract_features(self.detector)
-        self.trajectory.append(np.zeros(3))
-        
-        #processing consecutive frame pairs
-        for i in range(len(self.frames) - 1):
-            print(f"\nProcessing frames {i} -> {i+1}")
-            self.process_frame_pair(self.frames[i], self.frames[i+1])
-        
-        print("\n" + "=" * 60)
-        print("Visual Odometry processing complete!")
-        print(f"Total frames processed: {len(self.frames)}")
-        print(f"Trajectory length: {len(self.trajectory)}")
-        
-    def get_trajectory(self) -> np.ndarray:
-        return np.array(self.trajectory)
-    
-    def get_frame_with_keypoints(self, frame_idx: int) -> np.ndarray:
-        if frame_idx >= len(self.frames):
-            return None
-        
-        frame = self.frames[frame_idx]
-        img_with_kp = cv2.drawKeypoints(frame.image, frame.keypoints, None, 
-                                        color=(0, 255, 0), 
-                                        flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        return img_with_kp
+            prev = self.frames[i - 1]
+            rotation, translation, matches = self.estimate_motion(prev, frame)
 
-    def smooth_trajectory(self, window_length=11, polyorder=3):
-        if len(self.trajectory) < window_length:
-            print(f"Warning: Trajectory too short for smoothing (need at least {window_length} points)")
-            return np.array(self.trajectory)
+            if rotation is None or translation is None:
+                continue #if pose estimation failed, the frame is skipped
+
+            frame.rotation_matrix = rotation
+            frame.translation_vector = translation
+
+            t_matrix = np.eye(4)
+            t_matrix[:3, :3] = frame.rotation_matrix
+            t_matrix[:3, 3] =  frame.translation_vector.flatten()
+
+            frame.pose = prev.pose @ np.linalg.inv(t_matrix)
+
+            pos = frame.pose[:3, 3]
+            self.trajectory.append(pos)
+
+            #keypoints/matches window
+            vis = cv2.drawMatches(prev.image, prev.keypoints, frame.image, frame.keypoints, matches[:50], None)
+            cv2.imshow("Keypoints / Matches", vis)
+
+            #trajectory window
+            traj = self.smooth_traj(np.array(self.trajectory))
+            self.visualizer.update(traj)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27 or key == ord('q') or key == ord('Q'):
+                cv2.destroyAllWindows()
+                raise SystemExit
+
+        traj = self.smooth_traj(np.array(self.trajectory))
+        self.visualizer.update(traj)
+        while True:
+            self.visualizer.update(traj) #this intends to keep the trajectory window responsive at the end
+
+            key = cv2.waitKey(30) & 0xFF
+            if key == 27 or key == ord('q') or key == ord('Q'):
+                break
         
-        trajectory_array = np.array(self.trajectory)
-        
-        smoothed_trajectory = np.zeros_like(trajectory_array)
-        smoothed_trajectory[:, 0] = savgol_filter(trajectory_array[:, 0], window_length, polyorder)
-        smoothed_trajectory[:, 1] = savgol_filter(trajectory_array[:, 1], window_length, polyorder)
-        smoothed_trajectory[:, 2] = savgol_filter(trajectory_array[:, 2], window_length, polyorder)
-        
-        return smoothed_trajectory
+        cv2.destroyAllWindows()

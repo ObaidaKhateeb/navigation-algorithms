@@ -7,7 +7,7 @@
 
 ## Usage
 ```
-python main.py dataset_path [-h] [--matplotlib] [--sift] [--delay DELAY]
+python main.py dataset_path [-h] [--matplotlib] [--sift]
 ```
 
 **Default behavior**: ORB, Pangolin, and 50ms delay between frames.
@@ -18,7 +18,6 @@ python main.py dataset_path [-h] [--matplotlib] [--sift] [--delay DELAY]
 ### Optional Arguments:
 - `-h, --help` - Show help message
 - `--sift` - Use SIFT instead of ORB
-- `--delay DELAY` - Delay between frames in ms (default: 50ms)
 - `--matplotlib` - Use matplotlib instead of Pangolin for visualization
 
 ## Controls

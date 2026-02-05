@@ -38,40 +38,31 @@ class VisualOdometry:
         frame.descriptors = des
 
     def estimate_motion(self, f1, f2):
-        # 1) Must have descriptors
+        #ensure descriptors exists
         if f1.descriptors is None or f2.descriptors is None:
             return None, None, []
 
-        # 2) Match
-        matches = self.matcher.match(f1.descriptors, f2.descriptors)
+        matches = self.matcher.match(f1.descriptors, f2.descriptors) #matching
 
-        # 3) Need enough matches
+        #check if there enough matches
         if matches is None or len(matches) < 8:
             return None, None, []
 
         matches = sorted(matches, key=lambda x: x.distance)
         matches = matches[:2000]
 
-        # 4) Build point arrays
+        #point arrays building
         pts1 = np.float32([f1.keypoints[m.queryIdx].pt for m in matches]).reshape(-1, 2)
         pts2 = np.float32([f2.keypoints[m.trainIdx].pt for m in matches]).reshape(-1, 2)
 
-        # 5) Need enough points for Essential matrix
+        #Essential matrix computation 
         if pts1.shape[0] < 8 or pts2.shape[0] < 8:
             return None, None, matches
-
-        # 6) Compute Essential matrix
-        essential_matrix, mask = cv2.findEssentialMat(
-            pts1, pts2, self.k,
-            method=cv2.RANSAC,
-            prob=0.999,
-            threshold=1.0
-        )
-
+        essential_matrix, mask = cv2.findEssentialMat(pts1, pts2, self.k, method=cv2.RANSAC, prob=0.999, threshold=1.0)
         if essential_matrix is None or mask is None:
             return None, None, matches
 
-        # 7) Recover pose using inliers
+        #Pose recovering
         inliers = mask.ravel().astype(bool)
         pts1_in = pts1[inliers]
         pts2_in = pts2[inliers]
@@ -113,8 +104,7 @@ class VisualOdometry:
             self.extract_features(frame)
             self.frames.append(frame)
             
-            kp_img = cv2.drawKeypoints(frame.image, frame.keypoints, None,
-                    flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+            kp_img = cv2.drawKeypoints(frame.image, frame.keypoints, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
             cv2.imshow("Features (Current Frame)", kp_img)
 
             if i == 0:
@@ -126,9 +116,8 @@ class VisualOdometry:
             prev = self.frames[i - 1]
             rotation, translation, matches = self.estimate_motion(prev, frame)
 
-            # if pose estimation failed, skip this frame
             if rotation is None or translation is None:
-                continue
+                continue #if pose estimation failed, the frame is skipped
 
             frame.rotation_matrix = rotation
             frame.translation_vector = translation
@@ -142,13 +131,11 @@ class VisualOdometry:
             pos = frame.pose[:3, 3]
             self.trajectory.append(pos)
 
-            # --- window 1: keypoints/matches ---
-            vis = cv2.drawMatches(prev.image, prev.keypoints,
-                                  frame.image, frame.keypoints,
-                                  matches[:50], None)
+            #keypoints/matches window
+            vis = cv2.drawMatches(prev.image, prev.keypoints, frame.image, frame.keypoints, matches[:50], None)
             cv2.imshow("Keypoints / Matches", vis)
 
-            # --- window 2: trajectory realtime ---
+            #trajectory window
             traj = self.smooth_traj(np.array(self.trajectory))
             self.visualizer.update(traj)
 
@@ -180,16 +167,23 @@ class MatplotlibVisualizer(BaseVisualizer):
         import matplotlib.pyplot as plt
         self.plt = plt
         plt.ion()
-        self.fig = plt.figure()
+        self.fig = plt.figure(facecolor='black')
         self.ax = self.fig.add_subplot(111, projection='3d')
-        self.line, = self.ax.plot([], [], [], 'b-')
+        self.fig.patch.set_facecolor('black')
+        self.line, = self.ax.plot([], [], [], 'y-', linewidth = 2)
         self.start = None
         self.end = None
 
-        self.ax.set_xlabel("X (right)")
-        self.ax.set_ylabel("Y (up)")
-        self.ax.set_zlabel("Z (forward)")
-        self.ax.set_title("Estimated Trajectory (Real-Time)")
+        self.ax.set_facecolor('black')
+        self.ax.set_xlabel("X (right)", color='white')
+        self.ax.set_ylabel("Y (up)", color='white')
+        self.ax.set_zlabel("Z (forward)", color='white')
+        self.ax.set_title("Estimated Trajectory (Real-Time)", color='white')
+        self.ax.tick_params(colors='white')
+        self.ax.grid(True, color='white', linestyle='-', linewidth=0.5, alpha=0.3)
+        self.ax.xaxis.pane.fill = False
+        self.ax.yaxis.pane.fill = False
+        self.ax.zaxis.pane.fill = False
 
     def update(self, traj: np.ndarray):
         if traj.shape[0] < 2:
@@ -197,9 +191,9 @@ class MatplotlibVisualizer(BaseVisualizer):
         self.line.set_data(traj[:, 0], traj[:, 1])
         self.line.set_3d_properties(traj[:, 2])
 
+        #start and end points coloring 
         if self.start is None:
             self.start = self.ax.scatter(traj[0,0], traj[0,1], traj[0,2], c='g', s=60)
-
         if self.end is not None:
             self.end.remove()
         self.end = self.ax.scatter(traj[-1,0], traj[-1,1], traj[-1,2], c='r', s=60)
@@ -219,19 +213,13 @@ class PangolinVisualizer(BaseVisualizer):
         self.pangolin = pangolin
         self.gl = gl
         self.closed = False
-
         pangolin.CreateWindowAndBind("Trajectory (Pangolin)", 1024, 768)
         gl.glEnable(gl.GL_DEPTH_TEST)
-
-        self.s_cam = pangolin.OpenGlRenderState(
-            pangolin.ProjectionMatrix(1024, 768, 500, 500, 512, 389, 0.1, 1000),
-            pangolin.ModelViewLookAt(0, -9, -30, 0, 0, 0, 0, -1, 0)
-        )
-
+        self.s_cam = pangolin.OpenGlRenderState(pangolin.ProjectionMatrix(1024, 768, 500, 500, 512, 389, 0.1, 1000),
+            pangolin.ModelViewLookAt(0, -9, -30, 0, 0, 0, 0, -1, 0))
         self.handler = pangolin.Handler3D(self.s_cam)
         self.d_cam = pangolin.CreateDisplay()
-        self.d_cam.SetBounds(pangolin.Attach(0.0),pangolin.Attach(1.0),pangolin.Attach(0.0),
-            pangolin.Attach(1.0),-1024.0 / 768.0)
+        self.d_cam.SetBounds(pangolin.Attach(0.0),pangolin.Attach(1.0),pangolin.Attach(0.0), pangolin.Attach(1.0),-1024.0 / 768.0)
         self.d_cam.SetHandler(self.handler)
 
     def update(self, traj: np.ndarray):
@@ -316,24 +304,17 @@ class PangolinVisualizer(BaseVisualizer):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("image_dir", help="Path to directory containing images")
-    parser.add_argument("--sift", action="store_true", 
-            help="Use SIFT instead of ORB (default: ORB)")
-    parser.add_argument("--matplotlib", action="store_true",
-                        help="Use matplotlib visualizer (default: Pangolin)")
+    parser.add_argument("--sift", action="store_true", help="Use SIFT instead of ORB (default: ORB)")
+    parser.add_argument("--matplotlib", action="store_true", help="Use matplotlib visualizer (default: Pangolin)")
     args = parser.parse_args()
 
     image_dir = args.image_dir
-
-    images = sorted(
-        glob.glob(os.path.join(image_dir, "*.png")) +
-        glob.glob(os.path.join(image_dir, "*.jpg")) +
-        glob.glob(os.path.join(image_dir, "*.jpeg"))
-    )
+    images = sorted(glob.glob(os.path.join(image_dir, "*.png")) + glob.glob(os.path.join(image_dir, "*.jpg")) +
+            glob.glob(os.path.join(image_dir, "*.jpeg")))
 
     if len(images) == 0:
         raise RuntimeError("No images found in directory")
     
-    # Determine which visualizer to use
     if args.matplotlib:
         visualizer = MatplotlibVisualizer()
     else:

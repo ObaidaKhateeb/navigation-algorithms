@@ -1,152 +1,224 @@
-# from PIL import Image
-# import pillow_heif
-# import glob
-# import os
-
-# # Register HEIF opener
-# pillow_heif.register_heif_opener()
-
-# input_folder = "./test/right_test"
-
-# for img_path in glob.glob(os.path.join(input_folder, "*")):
-#     # Skip if already proper JPG
-#     if img_path.lower().endswith('.jpg') and 'HEIC' not in img_path.upper():
-#         continue
-    
-#     try:
-#         img = Image.open(img_path)
-        
-#         # Convert to RGB if needed
-#         if img.mode in ("RGBA", "LA", "P"):
-#             img = img.convert("RGB")
-        
-#         # Get base filename (remove .HEIC.jpg or just .HEIC)
-#         base_name = os.path.basename(img_path)
-#         base_name = base_name.replace('.HEIC.jpg', '').replace('.HEIC', '').replace('.heic', '')
-        
-#         output_path = os.path.join(input_folder, f"{base_name}.jpg")
-        
-#         img.save(output_path, "JPEG", quality=95)
-#         print(f"✓ Converted: {base_name}.jpg")
-        
-#         # Remove original HEIC file
-#         if img_path != output_path:
-#             os.remove(img_path)
-#             print(f"  Removed: {os.path.basename(img_path)}")
-            
-#     except Exception as e:
-#         print(f"✗ Error converting {os.path.basename(img_path)}: {e}")
-
-# print("\nConversion complete!")
-
-
-# import pangolin
-# import OpenGL.GL as gl
-# pangolin.CreateWindowAndBind ('Test Window', 640 , 480)
-# gl.glClearColor(0.2 , 0.2 , 0.2 , 1.0)
-# while not pangolin.ShouldQuit():
-#     gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-# pangolin.FinishFrame()
-
-
-from PIL import Image
 import os
-import sys
+import glob
+import time
+import argparse
+import numpy as np
+import cv2
 
-# --- 1. Configuration ---
-output_folder = "sliding_3_different_objects"
-num_frames = 50
-# Canvas size (Width, Height)
-canvas_size = (700, 500)  
-# Target size for all objects so they look uniform
-object_target_size = (100, 100) 
-bg_color = (255, 255, 255) # White background
-
-# The list of required input files
-required_files = ["source_ball1.png", "source_ball2.png", "source_ball3.png"]
-# A list to store the processed images ready for pasting
-loaded_objects = []
+import pypangolin as pangolin
+from OpenGL.GL import *
 
 
-# --- 2. Setup and Loading Loop ---
-if not os.path.exists(output_folder):
-    os.makedirs(output_folder)
-
-print("Checking and loading source images...")
-
-# Loop through the 3 required filenames
-for fname in required_files:
-    # Check if file exists before trying to open
-    if not os.path.exists(fname):
-        print(f"\nERROR: Missing file! Could not find '{fname}'")
-        print("Please ensure all 3 source_ball files are in the same folder.")
-        sys.exit()
-
-    try:
-        # Load image and ensure RGBA for transparency
-        raw_img = Image.open(fname).convert("RGBA")
-        # Resize uniformly
-        resized_img = raw_img.resize(object_target_size, Image.Resampling.LANCZOS)
-        # Add the finished image to our list
-        loaded_objects.append(resized_img)
-        print(f" - Successfully loaded and resized: {fname}")
-    except Exception as e:
-        print(f"Error processing image {fname}: {e}")
-        sys.exit()
+# =========================
+# Frame object
+# =========================
+class Frame:
+    def __init__(self, idx, image):
+        self.id = idx
+        self.image = image
+        self.kps = None
+        self.des = None
+        self.pose = np.eye(4, dtype=np.float64)
 
 
-# --- 3. Position Calculations ---
-# (This logic is identical to the previous script to ensure even spacing)
-
-# A. Horizontal Movement (X-axis)
-start_x = -object_target_size[0]
-end_x = canvas_size[0]
-total_distance = end_x - start_x
-pixels_per_frame = total_distance / num_frames
-
-# B. Vertical Positions (Y-axis)
-canvas_h = canvas_size[1]
-obj_h = object_target_size[1]
-
-if canvas_h < (3 * obj_h):
-     print("Error: Canvas height is too small for 3 stacked objects.")
-     sys.exit()
-
-total_used_height = 3 * obj_h
-remaining_space = canvas_h - total_used_height
-padding = remaining_space // 4
-
-# Calculate the fixed Y positions for the three slots
-top_y = padding
-middle_y = padding + obj_h + padding
-bottom_y = middle_y + obj_h + padding
+# =========================
+# Utility functions
+# =========================
+def load_images(folder):
+    exts = [".png", ".jpg", ".jpeg", ".bmp"]
+    paths = []
+    for e in exts:
+        paths.extend(glob.glob(os.path.join(folder, "*" + e)))
+    return sorted(paths)
 
 
-# --- 4. Generate Frames ---
-print(f"\nGenerating {num_frames} frames...")
+def build_K_from_image(img):
+    h, w = img.shape[:2]
+    f = max(h, w)
+    return np.array([
+        [f, 0, w / 2],
+        [0, f, h / 2],
+        [0, 0, 1]
+    ], dtype=np.float64)
 
-for i in range(num_frames):
-    bg_img = Image.new('RGB', canvas_size, bg_color)
-    current_x = int(start_x + (i * pixels_per_frame))
-    
-    # --- PASTE THE 3 DIFFERENT OBJECTS ---
-    # We access the images from the loaded_objects list by index [0], [1], [2]
-    
-    # Paste Object 1 (Top)
-    # Remember the 3rd argument is the mask for transparency
-    bg_img.paste(loaded_objects[0], (current_x, top_y), loaded_objects[0])
-    
-    # Paste Object 2 (Middle)
-    bg_img.paste(loaded_objects[1], (current_x, middle_y), loaded_objects[1])
-    
-    # Paste Object 3 (Bottom)
-    bg_img.paste(loaded_objects[2], (current_x, bottom_y), loaded_objects[2])
-    
-    # Save frame
-    filename = f"{output_folder}/frame_{i+1:02d}.jpg"
-    bg_img.save(filename, quality=95)
-    
-    if (i+1) % 10 == 0:
-        print(f"Saved frame {i+1}/{num_frames}...")
 
-print(f"Done! Check the '{output_folder}' folder.")
+# =========================
+# Visual Odometry core
+# =========================
+class MonoVisualOdometry:
+    def __init__(self, K, feature_type="ORB"):
+        self.K = K
+        self.T_wc = np.eye(4, dtype=np.float64)
+
+        if feature_type == "ORB":
+            self.detector = cv2.ORB_create(2000)
+            self.norm = cv2.NORM_HAMMING
+        else:
+            self.detector = cv2.SIFT_create(2000)
+            self.norm = cv2.NORM_L2
+
+        self.matcher = cv2.BFMatcher(self.norm)
+
+    def extract(self, frame: Frame):
+        gray = cv2.cvtColor(frame.image, cv2.COLOR_BGR2GRAY)
+        frame.kps, frame.des = self.detector.detectAndCompute(gray, None)
+
+    def estimate_motion(self, f1: Frame, f2: Frame):
+        if f1.des is None or f2.des is None:
+            return None, None
+
+        matches = self.matcher.knnMatch(f1.des, f2.des, k=2)
+
+        good = []
+        for m, n in matches:
+            if m.distance < 0.75 * n.distance:
+                good.append(m)
+
+        if len(good) < 8:
+            return None, None
+
+        pts1 = np.float32([f1.kps[m.queryIdx].pt for m in good])
+        pts2 = np.float32([f2.kps[m.trainIdx].pt for m in good])
+
+        E, _ = cv2.findEssentialMat(
+            pts1, pts2, self.K,
+            cv2.RANSAC, 0.999, 1.0
+        )
+
+        if E is None:
+            return None, None
+
+        _, R, t, _ = cv2.recoverPose(E, pts1, pts2, self.K)
+        return R, t
+
+    def integrate(self, R, t, scale=1.0):
+        t = t * scale
+
+        T = np.eye(4)
+        T[:3, :3] = R.T
+        T[:3, 3] = (-R.T @ t).ravel()
+
+        self.T_wc = self.T_wc @ T
+        return self.T_wc
+
+
+# =========================
+# Pangolin Viewer
+# =========================
+class TrajectoryViewer:
+    def __init__(self):
+        self.poses = []
+
+        pangolin.CreateWindowAndBind(
+            "Visual Odometry Trajectory | X=Red Y=Green Z=Blue", 1024, 768
+        )
+        glEnable(GL_DEPTH_TEST)
+
+        self.scam = pangolin.OpenGlRenderState(
+            pangolin.ProjectionMatrix(1024, 768, 500, 500, 512, 389, 0.1, 1000),
+            pangolin.ModelViewLookAt(0, -8, -8, 0, 0, 0, 0, 0, 1)
+        )
+
+        self.handler = pangolin.Handler3D(self.scam)
+        self.dcam = pangolin.CreateDisplay()
+        # self.dcam.SetBounds(0, 1, 0, 1, -1024 / 768)
+        self.dcam.SetBounds(pangolin.Attach(0.0),pangolin.Attach(1.0),pangolin.Attach(0.0),pangolin.Attach(1.0),-1024.0 / 768.0)
+        self.dcam.SetHandler(self.handler)
+
+    def add_pose(self, T_wc):
+        self.poses.append(T_wc.copy())
+
+    def draw_axes(self, scale=5.0):
+        glLineWidth(3)
+        glBegin(GL_LINES)
+
+        glColor3f(1, 0, 0)
+        glVertex3f(0, 0, 0)
+        glVertex3f(scale, 0, 0)
+
+        glColor3f(0, 1, 0)
+        glVertex3f(0, 0, 0)
+        glVertex3f(0, scale, 0)
+
+        glColor3f(0, 0, 1)
+        glVertex3f(0, 0, 0)
+        glVertex3f(0, 0, scale)
+
+        glEnd()
+
+    def draw(self):
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        self.dcam.Activate(self.scam)
+
+        self.draw_axes()
+
+        if len(self.poses) > 1:
+            glColor3f(1, 1, 0)
+            glLineWidth(2)
+            glBegin(GL_LINE_STRIP)
+            for T in self.poses:
+                glVertex3f(T[0, 3], T[1, 3], T[2, 3])
+            glEnd()
+
+        pangolin.FinishFrame()
+
+    def should_close(self):
+        return pangolin.ShouldQuit()
+
+
+# =========================
+# Main
+# =========================
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--feature", default="ORB", choices=["ORB", "SIFT"])
+    parser.add_argument("--scale", type=float, default=1.0)
+    parser.add_argument("--wait", type=int, default=1)
+    args = parser.parse_args()
+
+    img_paths = load_images("./test/right_test_simple2")
+    if len(img_paths) < 2:
+        raise RuntimeError("Dataset_VO must contain at least 2 images")
+
+    first_img = cv2.imread(img_paths[0])
+    K = build_K_from_image(first_img)
+
+    vo = MonoVisualOdometry(K, args.feature)
+    viewer = TrajectoryViewer()
+
+    prev_frame = None
+    cv2.namedWindow("Keypoints", cv2.WINDOW_NORMAL)
+
+    for i, path in enumerate(img_paths):
+        img = cv2.imread(path)
+        if img is None:
+            continue
+
+        frame = Frame(i, img)
+        vo.extract(frame)
+
+        kp_vis = cv2.drawKeypoints(img, frame.kps, None)
+        cv2.imshow("Keypoints", kp_vis)
+
+        if prev_frame is not None:
+            R, t = vo.estimate_motion(prev_frame, frame)
+            if R is not None:
+                pose = vo.integrate(R, t, args.scale)
+                frame.pose = pose
+            viewer.add_pose(vo.T_wc)
+        else:
+            viewer.add_pose(vo.T_wc)
+
+        prev_frame = frame
+        viewer.draw()
+
+        if cv2.waitKey(args.wait) & 0xFF in [27, ord('q')]:
+            break
+        if viewer.should_close():
+            break
+
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()

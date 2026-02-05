@@ -1,140 +1,51 @@
 import numpy as np
-import cv2
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from typing import List, Tuple
-import time
+from visualizer import BaseVisualizer
 
+class BaseVisualizer:
+    def update(self, traj: np.ndarray):
+        pass
+    def close(self):
+        pass
 
-class VOVisualizer:    
-    def __init__(self, vo_system):
-        self.vo = vo_system
-        self.trajectory_points = []
-        self.current_frame_idx = 0
+class MatplotlibVisualizer(BaseVisualizer):
+    def __init__(self):
+        import matplotlib.pyplot as plt
+        self.plt = plt
         plt.ion()
-        self.fig = plt.figure(figsize=(12, 5.5))
-        from matplotlib.gridspec import GridSpec
-        gs = GridSpec(2, 2, figure=self.fig, width_ratios=[1, 1], height_ratios=[1, 1])
-        self.ax_3d = self.fig.add_subplot(gs[:, 0], projection='3d')
-        self.ax_keypoints = self.fig.add_subplot(gs[0, 1])
-        self.ax_matches = self.fig.add_subplot(gs[1, 1])
-        self.setup_3d_plot()
-        self.latest_matches_img = None
-        
-    def setup_3d_plot(self):
-        self.ax_3d.set_xlabel('X (Right/Left)')
-        self.ax_3d.set_ylabel('Y (Up/Down)')
-        self.ax_3d.set_zlabel('Z (Forward/Backward)')
-        self.ax_3d.set_title('3D Trajectory')
-        self.ax_3d.grid(True)
-        self.ax_3d.view_init(elev=20, azim=45)
-        
-    def draw_camera(self, position, rotation, scale=0.5, color='red'):
-        frustum = np.array([[0,0,0], [-0.5,-0.5,1], [0.5,-0.5,1], [0.5,0.5,1], [-0.5,0.5,1]]) * scale
-        frustum_world = (rotation @ frustum.T).T + position
-        
-        for i in range(1, 5):
-            self.ax_3d.plot3D([frustum_world[0,0], frustum_world[i,0]], 
-                             [frustum_world[0,1], frustum_world[i,1]], 
-                             [frustum_world[0,2], frustum_world[i,2]], color=color, linewidth=1)
-        
-        for i in range(1, 5):
-            next_i = i + 1 if i < 4 else 1
-            self.ax_3d.plot3D([frustum_world[i,0], frustum_world[next_i,0]], 
-                             [frustum_world[i,1], frustum_world[next_i,1]], 
-                             [frustum_world[i,2], frustum_world[next_i,2]], color=color, linewidth=1)
-    
-    def update_3d_plot(self):
-        self.ax_3d.cla()
-        self.setup_3d_plot()
-        
-        if len(self.trajectory_points) > 0:
-            trajectory = np.array(self.trajectory_points)
-            
-            if len(self.trajectory_points) >= 11:
-                smoothed = self.vo.smooth_trajectory(window_length=11, polyorder=2)
-                self.ax_3d.plot3D(smoothed[:, 0], smoothed[:, 1], smoothed[:, 2], 
-                                'b-', linewidth=2, label='Smoothed Trajectory')
-                current_pos = smoothed[-1]
-            else:
-                self.ax_3d.plot3D(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
-                                'b-', linewidth=2, label='Trajectory')
-                current_pos = trajectory[-1]
-            
-            self.ax_3d.scatter(trajectory[0, 0], trajectory[0, 1], trajectory[0, 2], 
-                            c='green', s=100, marker='o', label='Start')
-            
-            if len(trajectory) > 1:
-                self.ax_3d.scatter(current_pos[0], current_pos[1], current_pos[2], 
-                                c='red', s=100, marker='o', label='Current')
-                self.draw_camera(current_pos, self.vo.current_rotation, scale=0.3, color='red')
-            
-            max_range = np.array([trajectory[:, 0].max() - trajectory[:, 0].min(),
-                                trajectory[:, 1].max() - trajectory[:, 1].min(),
-                                trajectory[:, 2].max() - trajectory[:, 2].min()]).max() / 2.0
-            
-            mid_x = (trajectory[:, 0].max() + trajectory[:, 0].min()) * 0.5
-            mid_y = (trajectory[:, 1].max() + trajectory[:, 1].min()) * 0.5
-            mid_z = (trajectory[:, 2].max() + trajectory[:, 2].min()) * 0.5
-            
-            self.ax_3d.set_xlim(mid_x - max_range, mid_x + max_range)
-            self.ax_3d.set_ylim(mid_y - max_range, mid_y + max_range)
-            self.ax_3d.set_zlim(mid_z - max_range, mid_z + max_range)
-            self.ax_3d.legend()
-    
-    def show_keypoints(self, frame, keypoints):
-        img_with_kp = cv2.drawKeypoints(frame.image, keypoints, None, color=(0, 255, 0),
-                                    flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        img_rgb = cv2.cvtColor(img_with_kp, cv2.COLOR_BGR2RGB)
-        
-        self.ax_keypoints.cla()
-        self.ax_keypoints.imshow(img_rgb)
-        self.ax_keypoints.set_title(f'Frame {frame.id} - {len(keypoints)} Keypoints')
-        self.ax_keypoints.axis('off')
-    
-    def show_matches(self, matches_img):
-        if matches_img is not None:
-            matches_rgb = cv2.cvtColor(matches_img, cv2.COLOR_BGR2RGB)
-            self.ax_matches.cla()
-            self.ax_matches.imshow(matches_rgb)
-            self.ax_matches.axis('off')
-    
-    def run_realtime(self, delay_ms=50):
-        print("\n" + "="*60)
-        print("Starting visual odometry")
-        print("="*60 + "\n")
-        
-        self.vo.frames[0].extract_features(self.vo.detector, self.vo.feature_type)
-        initial_position = self.vo.current_translation.flatten()
-        self.trajectory_points.append(initial_position.copy())
-        
-        self.show_keypoints(self.vo.frames[0], self.vo.frames[0].keypoints)
-        self.update_3d_plot()
-        plt.tight_layout()
-        plt.pause(0.1)
-        
-        for i in range(len(self.vo.frames) - 1):
-            if not plt.fignum_exists(self.fig.number):
-                break
-            
-            frame1 = self.vo.frames[i]
-            frame2 = self.vo.frames[i + 1]
-            
-            print(f"Processing frame pair {i+1}/{len(self.vo.frames)-1}...")
-            
-            matches_img = self.vo.process_frame_pair(frame1, frame2)
-            
-            if matches_img is not None:
-                self.latest_matches_img = matches_img
+        self.fig = plt.figure(facecolor='black')
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.fig.patch.set_facecolor('black')
+        self.line, = self.ax.plot([], [], [], 'y-', linewidth = 2)
+        self.start = None
+        self.end = None
 
-            position = self.vo.current_translation.flatten()
-            self.trajectory_points.append(position.copy())
-            self.show_keypoints(frame2, frame2.keypoints)
-            self.show_matches(self.latest_matches_img)
-            self.update_3d_plot()
-            plt.tight_layout()
-            plt.pause(delay_ms / 1000.0)
-        
-        print("\nProcessing complete!")
-        plt.ioff()
-        plt.show()
+        self.ax.set_facecolor('black')
+        self.ax.set_xlabel("X (right)", color='white')
+        self.ax.set_ylabel("Y (up)", color='white')
+        self.ax.set_zlabel("Z (forward)", color='white')
+        self.ax.set_title("Estimated Trajectory (Real-Time)", color='white')
+        self.ax.tick_params(colors='white')
+        self.ax.grid(True, color='white', linestyle='-', linewidth=0.5, alpha=0.3)
+        self.ax.xaxis.pane.fill = False
+        self.ax.yaxis.pane.fill = False
+        self.ax.zaxis.pane.fill = False
+
+    def update(self, traj: np.ndarray):
+        if traj.shape[0] < 2:
+            return
+        self.line.set_data(traj[:, 0], traj[:, 1])
+        self.line.set_3d_properties(traj[:, 2])
+
+        #start and end points coloring 
+        if self.start is None:
+            self.start = self.ax.scatter(traj[0,0], traj[0,1], traj[0,2], c='g', s=60)
+        if self.end is not None:
+            self.end.remove()
+        self.end = self.ax.scatter(traj[-1,0], traj[-1,1], traj[-1,2], c='r', s=60)
+
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+        self.plt.pause(0.001)
+
+    def close(self):
+        self.plt.close('all')
