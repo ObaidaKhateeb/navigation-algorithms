@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from scipy.signal import savgol_filter
 
+
 class Frame:
     def __init__(self, img, idx):
         self.id = idx
@@ -12,6 +13,7 @@ class Frame:
         self.rotation_matrix = np.eye(3)
         self.translation_vector = np.zeros((3, 1))
         self.processed = False
+
 
 class VisualOdometry:
     def __init__(self, image_paths, visualizer, use_sift=False):
@@ -35,31 +37,38 @@ class VisualOdometry:
         frame.descriptors = des
 
     def estimate_motion(self, f1, f2):
-        #ensure descriptors exists
+        # ensure descriptors exists
         if f1.descriptors is None or f2.descriptors is None:
             return None, None, []
 
-        matches = self.matcher.match(f1.descriptors, f2.descriptors) #matching
+        matches = self.matcher.match(f1.descriptors, f2.descriptors)  # matching
 
-        #check if there enough matches
-        if matches is None or len(matches) < 8:
+        # check if there enough matches
+        if len(matches) < 8:
             return None, None, []
 
         matches = sorted(matches, key=lambda x: x.distance)
         matches = matches[:2000]
 
-        #point arrays building
-        pts1 = np.float32([f1.keypoints[m.queryIdx].pt for m in matches]).reshape(-1, 2)
-        pts2 = np.float32([f2.keypoints[m.trainIdx].pt for m in matches]).reshape(-1, 2)
+        # point arrays building
+        pts1 = np.float32(
+            [f1.keypoints[m.queryIdx].pt for m in matches]
+        ).reshape(-1, 2)
+        pts2 = np.float32(
+            [f2.keypoints[m.trainIdx].pt for m in matches]
+        ).reshape(-1, 2)
 
-        #Essential matrix computation 
+        # Essential matrix computation
         if pts1.shape[0] < 8 or pts2.shape[0] < 8:
             return None, None, matches
-        essential_matrix, mask = cv2.findEssentialMat(pts1, pts2, self.k, method=cv2.LMEDS, prob=0.999, threshold=1.0)
+        essential_matrix, mask = cv2.findEssentialMat(
+            pts1, pts2, self.k,
+            method=cv2.LMEDS, prob=0.999, threshold=1.0
+        )
         if essential_matrix is None or mask is None:
             return None, None, matches
 
-        #Pose recovering
+        # Pose recovering
         inliers = mask.ravel().astype(bool)
         pts1_in = pts1[inliers]
         pts2_in = pts2[inliers]
@@ -67,19 +76,24 @@ class VisualOdometry:
         if pts1_in.shape[0] < 8:
             return None, None, matches
 
-        _, rotation, translation, _ = cv2.recoverPose(essential_matrix, pts1_in, pts2_in, self.k)
+        _, rotation, translation, _ = cv2.recoverPose(
+            essential_matrix, pts1_in, pts2_in, self.k
+        )
 
         return rotation, translation, matches
 
     def smooth_traj(self, traj):
         try:
-            if traj.shape[0] < 12: #smaller than the window size 
+            if traj.shape[0] < 12:  # smaller than the window size
                 return traj
 
             sm = traj.copy()
             for d in range(3):
-                sm[1:, d] = savgol_filter(traj[1:, d], window_length=11, polyorder=3, mode="interp")
-                
+                sm[1:, d] = savgol_filter(
+                    traj[1:, d], window_length=11,
+                    polyorder=3, mode="interp"
+                )
+
             return sm
         except Exception:
             return traj
@@ -95,14 +109,21 @@ class VisualOdometry:
                 fx = fy = 0.8 * w
                 cx = w / 2
                 cy = h / 2
-                self.k = np.array([[fx, 0, cx],
-                                   [0, fy, cy],
-                                   [0,  0,  1]])
+                self.k = np.array(
+                    [
+                        [fx, 0, cx],
+                        [0, fy, cy],
+                        [0, 0, 1],
+                    ]
+                )
 
             self.extract_features(frame)
             self.frames.append(frame)
-            
-            kp_img = cv2.drawKeypoints(frame.image, frame.keypoints, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
+            kp_img = cv2.drawKeypoints(
+                frame.image, frame.keypoints, None,
+                flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
+            )
             cv2.imshow("Features (Current Frame)", kp_img)
 
             if i == 0:
@@ -115,7 +136,7 @@ class VisualOdometry:
             rotation, translation, matches = self.estimate_motion(prev, frame)
 
             if rotation is None or translation is None:
-                continue #if pose estimation failed, the frame is skipped
+                continue  # if pose estimation failed, the frame is skipped
 
             frame.rotation_matrix = rotation
             frame.translation_vector = translation
@@ -129,16 +150,20 @@ class VisualOdometry:
             pos = frame.pose[:3, 3]
             self.trajectory.append(pos)
 
-            #keypoints/matches window
-            vis = cv2.drawMatches(prev.image, prev.keypoints, frame.image, frame.keypoints, matches[:50], None)
+            # keypoints/matches window
+            vis = cv2.drawMatches(
+                prev.image, prev.keypoints,
+                frame.image, frame.keypoints,
+                matches[:50], None
+            )
             cv2.imshow("Top Matches", vis)
 
-            #trajectory window
+            # trajectory window
             traj = self.smooth_traj(np.array(self.trajectory))
             self.visualizer.update(traj, i, total_frames)
 
             key = cv2.waitKey(1) & 0xFF
-            if key == 27 or key == ord('q') or key == ord('Q'):
+            if key in (27, ord("q"), ord("Q")):
                 cv2.destroyAllWindows()
                 raise SystemExit
 
@@ -146,10 +171,12 @@ class VisualOdometry:
         frame_count = len(self.images)
         self.visualizer.update(traj, frame_count, total_frames)
         while True:
-            self.visualizer.update(traj, frame_count, total_frames) #this intends to keep the trajectory window responsive at the end
+            self.visualizer.update(
+                traj, frame_count, total_frames
+            )  # keep trajectory window responsive
 
             key = cv2.waitKey(30) & 0xFF
-            if key == 27 or key == ord('q') or key == ord('Q'):
+            if key in (27, ord("q"), ord("Q")):
                 break
-        
+
         cv2.destroyAllWindows()
