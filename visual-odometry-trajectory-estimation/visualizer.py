@@ -1,7 +1,7 @@
 import numpy as np
 
 class BaseVisualizer:
-    def update(self, traj: np.ndarray):
+    def update(self, traj: np.ndarray, frame_num=0, total_frames=0):
         pass
     def close(self):
         pass
@@ -22,7 +22,7 @@ class PangolinVisualizer(BaseVisualizer):
         self.d_cam.SetBounds(pangolin.Attach(0.0),pangolin.Attach(1.0),pangolin.Attach(0.0), pangolin.Attach(1.0),-1024.0 / 768.0)
         self.d_cam.SetHandler(self.handler)
 
-    def update(self, traj: np.ndarray):
+    def update(self, traj: np.ndarray, frame_num=0, total_frames=0):
         pangolin = self.pangolin
         gl = self.gl
 

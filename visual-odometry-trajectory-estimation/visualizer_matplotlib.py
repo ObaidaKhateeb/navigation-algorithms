@@ -1,12 +1,6 @@
 import numpy as np
 from visualizer import BaseVisualizer
 
-class BaseVisualizer:
-    def update(self, traj: np.ndarray):
-        pass
-    def close(self):
-        pass
-
 class MatplotlibVisualizer(BaseVisualizer):
     def __init__(self):
         import matplotlib.pyplot as plt
@@ -30,7 +24,7 @@ class MatplotlibVisualizer(BaseVisualizer):
         self.ax.yaxis.pane.fill = False
         self.ax.zaxis.pane.fill = False
 
-    def update(self, traj: np.ndarray):
+    def update(self, traj: np.ndarray, frame_num = 0, total_frames=0):
         if traj.shape[0] < 2:
             return
         self.line.set_data(traj[:, 0], traj[:, 1])
@@ -42,6 +36,7 @@ class MatplotlibVisualizer(BaseVisualizer):
         if self.end is not None:
             self.end.remove()
         self.end = self.ax.scatter(traj[-1,0], traj[-1,1], traj[-1,2], c='r', s=60)
+        self.ax.set_title(f"Estimated Trajectory (Frame: {frame_num}/{total_frames})", color='white')
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()

@@ -17,7 +17,7 @@ class VisualOdometry:
     def __init__(self, image_paths, visualizer, use_sift=False):
         self.images = image_paths
         self.use_sift = use_sift
-        self.orb = cv2.ORB_create(200)
+        self.orb = cv2.ORB_create(2000)
         self.sift = cv2.SIFT_create()
         self.visualizer = visualizer
         if self.use_sift:
@@ -85,6 +85,7 @@ class VisualOdometry:
             return traj
 
     def run(self):
+        total_frames = len(self.images)
         for i, path in enumerate(self.images):
             img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
             frame = Frame(img, i)
@@ -107,7 +108,7 @@ class VisualOdometry:
             if i == 0:
                 self.trajectory.append(np.array([0.0, 0.0, 0.0]))
                 traj = self.smooth_traj(np.array(self.trajectory))
-                self.visualizer.update(traj)
+                self.visualizer.update(traj, i, total_frames)
                 continue
 
             prev = self.frames[i - 1]
@@ -134,7 +135,7 @@ class VisualOdometry:
 
             #trajectory window
             traj = self.smooth_traj(np.array(self.trajectory))
-            self.visualizer.update(traj)
+            self.visualizer.update(traj, i, total_frames)
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27 or key == ord('q') or key == ord('Q'):
@@ -142,9 +143,10 @@ class VisualOdometry:
                 raise SystemExit
 
         traj = self.smooth_traj(np.array(self.trajectory))
-        self.visualizer.update(traj)
+        frame_count = len(self.images)
+        self.visualizer.update(traj, frame_count, total_frames)
         while True:
-            self.visualizer.update(traj) #this intends to keep the trajectory window responsive at the end
+            self.visualizer.update(traj, frame_count, total_frames) #this intends to keep the trajectory window responsive at the end
 
             key = cv2.waitKey(30) & 0xFF
             if key == 27 or key == ord('q') or key == ord('Q'):

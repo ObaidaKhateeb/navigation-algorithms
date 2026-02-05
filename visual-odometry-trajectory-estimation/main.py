@@ -7,12 +7,21 @@ from visualizer import PangolinVisualizer
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("image_dir", help="Path to directory containing images")
+    parser.add_argument("image_dir", nargs='?', default=None, help="Path to directory containing images (default: Dataset_VO)")
     parser.add_argument("--sift", action="store_true", help="Use SIFT instead of ORB (default: ORB)")
     parser.add_argument("--matplotlib", action="store_true", help="Use matplotlib visualizer (default: Pangolin)")
     args = parser.parse_args()
 
-    image_dir = args.image_dir
+    if args.image_dir is None:
+        default_dir = "Dataset_VO"
+        if os.path.exists(default_dir) and os.path.isdir(default_dir):
+            image_dir = default_dir
+            print(f"No directory given, using default: {default_dir}")
+        else:
+            raise RuntimeError(f"No directory specified and default directory '{default_dir}' not found")
+    else:
+        image_dir = args.image_dir
+
     images = sorted(glob.glob(os.path.join(image_dir, "*.png")) + glob.glob(os.path.join(image_dir, "*.jpg")) +
             glob.glob(os.path.join(image_dir, "*.jpeg")))
 
