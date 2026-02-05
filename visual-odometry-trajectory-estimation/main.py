@@ -1,3 +1,12 @@
+"""
+Visual Odometry Assignment
+
+Students:
+- Obaida Khateeb - 201278066
+- Falah Abu Raya - 212530034
+- Lama Hammoud - 324839984
+"""
+
 import glob
 import argparse
 import os
