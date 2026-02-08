@@ -2,6 +2,39 @@ import cv2
 import numpy as np
 from scipy.signal import savgol_filter
 
+def epipolar_error_stats(F, pts1, pts2):
+    pts1 = pts1.reshape(-1, 2)
+    pts2 = pts2.reshape(-1, 2)
+
+    if pts1.shape[0] == 0 or pts2.shape[0] == 0:
+        return {"n": 0, "mean": 0.0, "median": 0.0, "p95": 0.0}
+
+    x1 = np.hstack([pts1, np.ones((pts1.shape[0], 1))])
+    x2 = np.hstack([pts2, np.ones((pts2.shape[0], 1))])
+
+    l2 = (F @ x1.T).T
+    l1 = (F.T @ x2.T).T
+
+    d2 = np.abs(np.sum(l2 * x2, axis=1)) / (
+        np.sqrt(l2[:, 0] ** 2 + l2[:, 1] ** 2) + 1e-12
+    )
+    d1 = np.abs(np.sum(l1 * x1, axis=1)) / (
+        np.sqrt(l1[:, 0] ** 2 + l1[:, 1] ** 2) + 1e-12
+    )
+
+    e = 0.5 * (d1 + d2)
+    
+    e = e[np.isfinite(e)]
+    if e.size == 0:
+        return {"n": 0, "mean": 0.0, "median": 0.0, "p95": 0.0}
+
+
+    return {
+        "n": int(e.shape[0]),
+        "mean": float(np.mean(e)),
+        "median": float(np.median(e)),
+        "p95": float(np.percentile(e, 95)),
+    }
 
 class Frame:
     def __init__(self, img, idx):
@@ -40,13 +73,13 @@ class VisualOdometry:
     def estimate_motion(self, f1, f2):
         # ensure descriptors exists
         if f1.descriptors is None or f2.descriptors is None:
-            return None, None, []
+            return None, None, None
 
         matches = self.matcher.match(f1.descriptors, f2.descriptors)  # matching
 
         # check if there enough matches
         if len(matches) < 8:
-            return None, None, []
+            return None, None, None
 
         matches = sorted(matches, key=lambda x: x.distance)
         matches = matches[:2000]
@@ -74,14 +107,26 @@ class VisualOdometry:
         pts1_in = pts1[inliers]
         pts2_in = pts2[inliers]
 
+        #epipolar error
+        Kinv = np.linalg.inv(self.k)
+        F = Kinv.T @ essential_matrix @ Kinv
+        inliers_idx = np.where(inliers)[0]
+
+        info = {
+            "matches_raw": matches[:50],
+            "matches_inliers": [matches[i] for i in inliers_idx[:50]],
+            "epi_raw": epipolar_error_stats(F, pts1, pts2),
+            "epi_in": epipolar_error_stats(F, pts1_in, pts2_in),
+        }
+
         if pts1_in.shape[0] < 8:
-            return None, None, matches
+            return None, None, info
 
         _, rotation, translation, _ = cv2.recoverPose(
             essential_matrix, pts1_in, pts2_in, self.k
         )
 
-        return rotation, translation, matches
+        return rotation, translation, info
 
     def smooth_traj(self, traj):
         try:
@@ -100,6 +145,8 @@ class VisualOdometry:
             return traj
 
     def run(self):
+        min_inliers = 20
+        max_inlier_median_epipolar_px = 2.0
         total_frames = len(self.images)
         for i, path in enumerate(self.images):
             img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
@@ -133,13 +180,63 @@ class VisualOdometry:
                 if self.smooth:
                     traj = self.smooth_traj(traj)
                 self.visualizer.update(traj, i, total_frames)
+                cv2.waitKey(1)
                 continue
 
             prev = self.frames[i - 1]
-            rotation, translation, matches = self.estimate_motion(prev, frame)
+            rotation, translation, info = self.estimate_motion(prev, frame)
+
+            # matches windows + epipolar error stats
+            if info is not None:
+                cv2.imshow(
+                    "Matches (Raw)",
+                    cv2.drawMatches(
+                        prev.image, prev.keypoints,
+                        frame.image, frame.keypoints,
+                        info["matches_raw"], None
+                    )
+                )
+
+                cv2.imshow(
+                    "Matches (Inliers)",
+                    cv2.drawMatches(
+                        prev.image, prev.keypoints,
+                        frame.image, frame.keypoints,
+                        info["matches_inliers"], None
+                    )
+                )
+
+                r = info["epi_raw"]
+                i_ = info["epi_in"]
+                print(
+                    f"[Frame {i}] Epipolar error (px) "
+                    f"Before Filtering: n={r['n']} mean={r['mean']:.2f} med={r['median']:.2f} p95={r['p95']:.2f} | "
+                    f"After Filtering: n={i_['n']} mean={i_['mean']:.2f} med={i_['median']:.2f} p95={i_['p95']:.2f}"
+                )
 
             if rotation is None or translation is None:
+                print(f"[Frame {i}] Rejected: pose estimation failed")
+                cv2.waitKey(1)
                 continue  # if pose estimation failed, the frame is skipped
+
+            #trajectory reliability check
+            if info is None:
+                print(f"[Frame {i}] Rejected: no info")
+                cv2.waitKey(1)
+                continue
+
+            if info["epi_in"]["n"] < min_inliers:
+                print(f"[Frame {i}] Rejected: too few inliers ({info['epi_in']['n']})")
+                cv2.waitKey(1)
+                continue
+
+            if info["epi_in"]["median"] > max_inlier_median_epipolar_px:
+                print(
+                    f"[Frame {i}] Rejected: high inlier epipolar median "
+                    f"({info['epi_in']['median']:.2f}px)"
+                )
+                cv2.waitKey(1)
+                continue
 
             frame.rotation_matrix = rotation
             frame.translation_vector = translation
@@ -152,14 +249,6 @@ class VisualOdometry:
 
             pos = frame.pose[:3, 3]
             self.trajectory.append(pos)
-
-            # keypoints/matches window
-            vis = cv2.drawMatches(
-                prev.image, prev.keypoints,
-                frame.image, frame.keypoints,
-                matches[:50], None
-            )
-            cv2.imshow("Top Matches", vis)
 
             # trajectory window
             traj = np.array(self.trajectory)
