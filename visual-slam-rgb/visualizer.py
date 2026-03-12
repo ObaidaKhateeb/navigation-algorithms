@@ -5,8 +5,9 @@ class BaseVisualizer:
     def update(
         self,
         traj: np.ndarray,
+        points=None,
         frame_num=0,
-        total_frames=0,
+        total_frames=0
     ):
         pass
 
@@ -42,10 +43,11 @@ class PangolinVisualizer(BaseVisualizer):
         self.d_cam.SetHandler(self.handler)
 
     def update(
-        self,
+        self, 
         traj: np.ndarray,
+        points=None,
         frame_num=0,
-        total_frames=0,
+        total_frames=0
     ):
         pangolin = self.pangolin
         gl = self.gl
@@ -67,6 +69,17 @@ class PangolinVisualizer(BaseVisualizer):
             for p in traj:
                 gl.glVertex3f(float(p[0]), float(p[1]), float(p[2]))
             gl.glEnd()
+            
+        # Draw point cloud (Part 4)
+        if points is not None:
+            points = np.asarray(points, dtype=float).reshape(-1, 3)
+            if points.shape[0] > 0:
+                gl.glPointSize(2)
+                gl.glColor3f(0.0, 0.5, 1.0)
+                gl.glBegin(gl.GL_POINTS)
+                for X in points:
+                    gl.glVertex3f(float(X[0]), float(X[1]), float(X[2]))
+                gl.glEnd()
 
         # coloring the start and end points
         gl.glPointSize(10)
