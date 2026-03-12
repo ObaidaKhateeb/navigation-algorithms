@@ -2,6 +2,7 @@ import numpy as np
 from visualizer import BaseVisualizer
 
 
+
 class MatplotlibVisualizer(BaseVisualizer):
     def __init__(self):
         import matplotlib.pyplot as plt
@@ -16,7 +17,7 @@ class MatplotlibVisualizer(BaseVisualizer):
         )
         self.start = None
         self.end = None
-
+ 
         self.ax.set_facecolor("black")
         self.ax.set_xlabel("X (right)", color="white")
         self.ax.set_ylabel("Y (up)", color="white")

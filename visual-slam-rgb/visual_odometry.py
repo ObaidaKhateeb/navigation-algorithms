@@ -597,7 +597,7 @@ class VisualOdometry:
         final_cost = compute_cost()
         print(f"  [GD-Loop] Finished {max_iterations} iterations. Cost: {final_cost:.2f}")
 
-    
+     
     # ---------- Main loop ----------
     def run(self):
         min_inliers = 20

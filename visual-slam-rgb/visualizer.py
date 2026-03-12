@@ -114,6 +114,7 @@ class PangolinVisualizer(BaseVisualizer):
             )
         )
 
+
     def draw_grid_and_axes(self):
         gl = self.gl
 
