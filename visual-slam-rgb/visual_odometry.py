@@ -1,13 +1,13 @@
 import cv2
 import numpy as np
 from scipy.signal import savgol_filter
-from scipy.optimize import least_squares
+#from scipy.optimize import least_squares
 
 class Point3D:
     def __init__(self, xyz, pid):
         self.id = pid
         self.xyz = np.asarray(xyz, dtype=float).reshape(3,)
-        self.observations = []  # optional: list of (frame_id, kp_idx)
+        self.observations = []  # list of (frame_id, kp_idx)
 
 
 class Map3D:
@@ -104,6 +104,7 @@ class VisualOdometry:
         self.frames = []
         self.trajectory = []
         self.k = None
+        
 
         self.map = Map3D()
         # ---------- Part 5: PnP database ----------
@@ -240,6 +241,36 @@ class VisualOdometry:
         u = x[0, 0] / x[2, 0]
         v = x[1, 0] / x[2, 0]
         return np.array([u, v], dtype=float)
+    
+    def _pose_to_params_cw(self, Twc):
+        """
+        Convert pose from Twc (camera->world) to 6D params of Tcw (world->camera):
+        [rx, ry, rz, tx, ty, tz]
+        where rotation is Rodrigues vector.
+        """
+        Tcw = np.linalg.inv(Twc)
+        Rcw = Tcw[:3, :3]
+        tcw = Tcw[:3, 3]
+        rvec, _ = cv2.Rodrigues(Rcw)
+        return np.hstack([rvec.ravel(), tcw.ravel()])
+
+
+    def _params_to_pose_wc(self, params):
+        """
+        Convert 6D params [rx, ry, rz, tx, ty, tz] of Tcw (world->camera)
+        back to Twc (camera->world).
+        """
+        rvec = params[:3].reshape(3, 1)
+        tvec = params[3:].reshape(3, 1)
+
+        Rcw, _ = cv2.Rodrigues(rvec)
+
+        Tcw = np.eye(4)
+        Tcw[:3, :3] = Rcw
+        Tcw[:3, 3] = tvec.ravel()
+
+        Twc = np.linalg.inv(Tcw)
+        return Twc
 
     def _check_motion_validity(self, prev_pose, new_pose, max_translation=3.0, max_rotation_deg=20.0):
         """
@@ -270,6 +301,67 @@ class VisualOdometry:
         
         return True, "OK"
     
+    def _frame_reprojection_residuals(self, params, frame_obs):
+        """
+        params: 6D pose params [rvec(3), tvec(3)] in world->camera form
+        frame_obs: list of (Xw, uv_obs)
+        returns residual vector [du1, dv1, du2, dv2, ...]
+        """
+        rvec = params[:3].reshape(3, 1)
+        tvec = params[3:].reshape(3, 1)
+        Rcw, _ = cv2.Rodrigues(rvec)
+
+        residuals = []
+
+        for Xw, uv_obs in frame_obs:
+            Xw = np.asarray(Xw, dtype=float).reshape(3, 1)
+            Xc = Rcw @ Xw + tvec
+            z = Xc[2, 0]
+
+            if z <= 1e-6:
+                continue
+
+            x = self.k @ Xc
+            u = x[0, 0] / x[2, 0]
+            v = x[1, 0] / x[2, 0]
+
+            residuals.extend([u - uv_obs[0], v - uv_obs[1]])
+
+        return np.array(residuals, dtype=float)
+    
+    def _frame_reprojection_cost(self, params, frame_obs, robust_clip=25.0):
+        """
+        Sum of squared reprojection residuals with optional clipping.
+        robust_clip=25 means each residual component squared is clipped at 25.
+        """
+        res = self._frame_reprojection_residuals(params, frame_obs)
+        if res.size == 0:
+            return 0.0
+
+        sq = res ** 2
+        sq = np.minimum(sq, robust_clip)
+        return float(np.sum(sq))
+    
+    def _numerical_gradient_pose(self, params, frame_obs, eps=1e-5):
+        """
+        Numerical gradient of reprojection cost wrt 6 pose params.
+        """
+        grad = np.zeros_like(params)
+
+        for k in range(len(params)):
+            p_plus = params.copy()
+            p_minus = params.copy()
+
+            p_plus[k] += eps
+            p_minus[k] -= eps
+
+            c_plus = self._frame_reprojection_cost(p_plus, frame_obs)
+            c_minus = self._frame_reprojection_cost(p_minus, frame_obs)
+
+            grad[k] = (c_plus - c_minus) / (2.0 * eps)
+
+        return grad
+    
     def detect_loop_closure(self, current_frame_id, min_frame_gap=100, min_matches=100):
         """
         Detect if current frame matches a previously visited location.
@@ -286,7 +378,7 @@ class VisualOdometry:
         best_match_count = 0
         best_match_frame = None
         
-        for old_frame_id in range(0, current_frame_id - min_frame_gap):
+        for old_frame_id in range(0, current_frame_id - min_frame_gap, 5):
             old_frame = self.frames[old_frame_id]
             if old_frame.descriptors is None:
                 continue
@@ -303,19 +395,41 @@ class VisualOdometry:
             # Sort by quality and count good matches
             good_matches = sorted(matches, key=lambda x: x.distance)[:150]
             
-            # Check average match quality
+            # Basic descriptor quality check
             avg_distance = np.mean([m.distance for m in good_matches])
-            threshold = 40 if self.use_sift else 25  # SIFT vs ORB threshold
-            
-            if avg_distance < threshold and len(good_matches) > best_match_count:
-                best_match_count = len(good_matches)
+            threshold = 40 if self.use_sift else 25
+
+            if avg_distance >= threshold:
+                continue
+
+            # Geometric verification with Essential matrix
+            pts_cur = np.float32([
+                current_frame.keypoints[m.queryIdx].pt for m in good_matches
+            ]).reshape(-1, 2)
+
+            pts_old = np.float32([
+                old_frame.keypoints[m.trainIdx].pt for m in good_matches
+            ]).reshape(-1, 2)
+
+            E, mask = cv2.findEssentialMat(
+                pts_old, pts_cur, self.k,
+                method=cv2.RANSAC, prob=0.999, threshold=1.0
+            )
+
+            if E is None or mask is None:
+                continue
+
+            geom_inliers = int(mask.ravel().sum())
+
+            if geom_inliers > best_match_count:
+                best_match_count = geom_inliers
                 best_match_frame = old_frame_id
         
         # Found a good loop closure candidate?
         if best_match_count >= min_matches:
             print(f"\n{'='*60}")
             print(f"[LOOP CLOSURE] Frame {current_frame_id} matches Frame {best_match_frame}")
-            print(f"[LOOP CLOSURE] Match quality: {best_match_count} good matches")
+            print(f"[LOOP CLOSURE] Geometric inliers: {best_match_count}")            
             print(f"{'='*60}\n")
             return True, best_match_frame
         
@@ -359,244 +473,258 @@ class VisualOdometry:
         }
         
         
-        
     def optimize_poses(self, window_size=20):
         """
-        Part 7: Gradient Descent optimization.
-        Iteratively updates poses to minimize reprojection error.
+        Part 7: Gradient Descent pose-only optimization.
+        Optimizes rotation + translation (6 DoF) for recent frames
+        by minimizing reprojection error.
         """
         if len(self.map.points) == 0 or len(self.frames) < 2:
             return
 
-        # Determine which frames to optimize
         total_frames = len(self.frames)
+
         if total_frames <= window_size:
-            start_idx = 1
+            start_idx = 1   # keep frame 0 fixed
             frames_to_optimize = self.frames[1:]
         else:
             start_idx = total_frames - window_size
             frames_to_optimize = self.frames[start_idx:]
 
-        # Collect observations
-        observations = []
+        # Collect observations per frame
+        observations_by_frame = {}
+        for fr in frames_to_optimize:
+            observations_by_frame[fr.id] = []
+
         for p in self.map.points:
             for fid, kp_idx in p.observations:
                 if fid < start_idx or fid >= total_frames:
                     continue
-                
+
                 fr = self.frames[fid]
                 if fr.keypoints is None or kp_idx < 0 or kp_idx >= len(fr.keypoints):
                     continue
-                
-                uv_proj = self._project_point(fr.pose, p.xyz)
-                if uv_proj is not None:
-                    uv_obs = np.array(fr.keypoints[kp_idx].pt, dtype=float)
-                    observations.append((p.xyz.copy(), fid, uv_obs))
-        
-        if len(observations) < 10:
-            print(f"  [Opt] Skipping: only {len(observations)} observations")
+
+                uv_obs = np.array(fr.keypoints[kp_idx].pt, dtype=float)
+                observations_by_frame[fid].append((p.xyz.copy(), uv_obs))
+
+        total_obs = sum(len(v) for v in observations_by_frame.values())
+        if total_obs < 20:
+            print(f"  [GD] Skipping: only {total_obs} observations")
             return
 
-        print(f"  [GD] Gradient Descent: optimizing {len(frames_to_optimize)} frames with {len(observations)} observations...")
+        print(f"  [GD] Optimizing {len(frames_to_optimize)} frames with {total_obs} observations")
 
-        # Gradient Descent hyperparameters
-        learning_rate = 0.00001  # Small step size for stability
-        max_iterations = 100
-        min_improvement = 1e-6
-        
-        def compute_cost():
-            """Compute total reprojection error (cost function)"""
-            total_error = 0.0
-            for X, fid, uv_obs in observations:
-                fr = self.frames[fid]
-                uv_proj = self._project_point(fr.pose, X)
-                if uv_proj is not None:
-                    error = uv_proj - uv_obs
-                    total_error += np.sum(error ** 2)
-            return total_error
-        
-        # Initial cost
-        prev_cost = compute_cost()
-        
-        # Gradient Descent iterations
-        for iteration in range(max_iterations):
-            # Update each frame
-            for fr in frames_to_optimize:
-                # Collect observations for this frame
-                frame_obs = [(X, uv_obs) for X, fid, uv_obs in observations if fid == fr.id]
-                
-                if len(frame_obs) == 0:
-                    continue
-                
-                # Compute gradient using numerical differentiation (finite differences)
-                gradient_t = np.zeros(3)
-                epsilon = 1e-7  # Small perturbation for numerical gradient
-                
-                # For each translation parameter
-                for axis in range(3):
-                    # Perturb position in positive direction
-                    pose_plus = fr.pose.copy()
-                    pose_plus[axis, 3] += epsilon
-                    
-                    # Perturb position in negative direction  
-                    pose_minus = fr.pose.copy()
-                    pose_minus[axis, 3] -= epsilon
-                    
-                    # Compute cost at both points
-                    cost_plus = 0.0
-                    cost_minus = 0.0
-                    
-                    for X, uv_obs in frame_obs:
-                        uv_proj_plus = self._project_point(pose_plus, X)
-                        uv_proj_minus = self._project_point(pose_minus, X)
-                        
-                        if uv_proj_plus is not None:
-                            error_plus = uv_proj_plus - uv_obs
-                            cost_plus += np.sum(error_plus ** 2)
-                        
-                        if uv_proj_minus is not None:
-                            error_minus = uv_proj_minus - uv_obs
-                            cost_minus += np.sum(error_minus ** 2)
-                    
-                    # Numerical gradient: (f(x+ε) - f(x-ε)) / (2ε)
-                    gradient_t[axis] = (cost_plus - cost_minus) / (2 * epsilon)
-                
-                # Gradient Descent update: x_new = x_old - learning_rate * gradient
-                new_translation = fr.pose[:3, 3] - learning_rate * gradient_t
-                
-                # Safety check: don't allow huge jumps
-                movement = np.linalg.norm(new_translation - fr.pose[:3, 3])
-                if movement < 1.0:  # Accept if movement is reasonable
-                    fr.pose[:3, 3] = new_translation
-            
-            # Compute new cost
-            current_cost = compute_cost()
-            improvement = prev_cost - current_cost
-            
-            # Check convergence
-            if improvement < min_improvement:
-                print(f"  [GD] Converged after {iteration + 1} iterations. Cost: {current_cost:.2f}")
-                return
-            
-            prev_cost = current_cost
-        
-        final_cost = compute_cost()
-        print(f"  [GD] Finished {max_iterations} iterations. Cost: {final_cost:.2f}")
-    
+        # Hyperparameters
+        max_iterations = 20
+        base_lr = 1e-4
+        min_step_norm = 1e-6
+        min_improvement = 1e-4
+
+        total_cost_before = 0.0
+        for fr in frames_to_optimize:
+            frame_obs = observations_by_frame[fr.id]
+            if len(frame_obs) < 10:
+                continue
+            params = self._pose_to_params_cw(fr.pose)
+            total_cost_before += self._frame_reprojection_cost(params, frame_obs)
+
+        # Optimize each frame independently (pose-only refinement)
+        for fr in frames_to_optimize:
+            frame_obs = observations_by_frame[fr.id]
+
+            if len(frame_obs) < 10:
+                continue
+
+            params = self._pose_to_params_cw(fr.pose)
+            lr = base_lr
+            prev_cost = self._frame_reprojection_cost(params, frame_obs)
+
+            for _ in range(max_iterations):
+                grad = self._numerical_gradient_pose(params, frame_obs, eps=1e-5)
+
+                # Gradient clipping
+                grad[:3] = np.clip(grad[:3], -100.0, 100.0)
+                grad[3:] = np.clip(grad[3:], -100.0, 100.0)
+
+                step = lr * grad
+
+                # Step clipping
+                step[:3] = np.clip(step[:3], -1e-2, 1e-2)
+                step[3:] = np.clip(step[3:], -1e-1, 1e-1)
+
+                new_params = params - step
+                new_cost = self._frame_reprojection_cost(new_params, frame_obs)
+
+                if new_cost < prev_cost:
+                    improvement = prev_cost - new_cost
+                    params = new_params
+                    prev_cost = new_cost
+
+                    if improvement < min_improvement or np.linalg.norm(step) < min_step_norm:
+                        break
+                else:
+                    lr *= 0.5
+                    if lr < 1e-7:
+                        break
+
+            fr.pose = self._params_to_pose_wc(params)
+
+        total_cost_after = 0.0
+        for fr in frames_to_optimize:
+            frame_obs = observations_by_frame[fr.id]
+            if len(frame_obs) < 10:
+                continue
+            params = self._pose_to_params_cw(fr.pose)
+            total_cost_after += self._frame_reprojection_cost(params, frame_obs)
+
+        print(f"  [GD] Cost before: {total_cost_before:.2f}")
+        print(f"  [GD] Cost after : {total_cost_after:.2f}")
+
+
+
     def correct_loop_closure(self, current_frame_id, loop_frame_id, window_size=150):
         """
-        Part 8: Gradient Descent optimization with loop closure constraint.
-        Optimizes trajectory while forcing current frame to align with loop frame.
+        Gradient Descent pose-only loop closure optimization.
+        Optimizes rotation + translation for a local window of frames,
+        while encouraging the current frame to align with the matched loop frame.
         """
         total_frames = len(self.frames)
-        start_idx = max(1, loop_frame_id)
-        frames_to_optimize = self.frames[start_idx:]
+        if total_frames < 2:
+            return
 
-        # Collect observations
-        observations = []
+        start_idx = max(loop_frame_id + 1, current_frame_id - window_size + 1)
+        end_idx = current_frame_id + 1
+        frames_to_optimize = self.frames[start_idx:end_idx]
+
+        if len(frames_to_optimize) == 0:
+            print("  [GD-Loop] Skipping: no frames")
+            return
+
+        observations_by_frame = {fr.id: [] for fr in frames_to_optimize}
+
         for p in self.map.points:
             for fid, kp_idx in p.observations:
-                if fid < start_idx or fid >= total_frames:
+                if fid < start_idx or fid >= end_idx:
                     continue
+
                 fr = self.frames[fid]
                 if fr.keypoints is None or kp_idx < 0 or kp_idx >= len(fr.keypoints):
                     continue
-                uv_proj = self._project_point(fr.pose, p.xyz)
-                if uv_proj is not None:
-                    uv_obs = np.array(fr.keypoints[kp_idx].pt, dtype=float)
-                    observations.append((p.xyz.copy(), fid, uv_obs))
 
-        if len(observations) < 10:
-            print("  [GD-Loop] Skipping: not enough observations")
+                uv = np.array(fr.keypoints[kp_idx].pt, dtype=float)
+                observations_by_frame[fid].append((p.xyz.copy(), uv))
+
+        total_obs = sum(len(v) for v in observations_by_frame.values())
+        if total_obs < 20:
+            print("  [GD-Loop] Not enough observations")
             return
 
-        print(f"  [GD-Loop] Gradient Descent with loop constraint: optimizing {len(frames_to_optimize)} frames...")
+        print(f"  [GD-Loop] Optimizing {len(frames_to_optimize)} frames")
 
-        # Gradient Descent parameters
-        learning_rate = 0.00001
-        max_iterations = 100
-        min_improvement = 1e-6
-        loop_weight = 0.5  # Weight for loop closure constraint
+        target_params = self._pose_to_params_cw(self.frames[loop_frame_id].pose)
 
-        # Target position for loop closure
-        target_pos = self.frames[loop_frame_id].pose[:3, 3]
+        max_iterations = 15
+        base_lr = 5e-4
+        rot_weight = 500.0
+        trans_weight = 500.0
+        min_improvement = 1e-4
+        min_step_norm = 1e-6
 
-        def compute_cost():
-            """Cost = reprojection error + loop closure error"""
-            total_error = 0.0
-            
-            # Reprojection errors
-            for X, fid, uv_obs in observations:
-                fr = self.frames[fid]
-                uv_proj = self._project_point(fr.pose, X)
-                if uv_proj is not None:
-                    error = uv_proj - uv_obs
-                    total_error += np.sum(error ** 2)
-            
-            # Loop closure constraint
-            current_pos = self.frames[current_frame_id].pose[:3, 3]
-            loop_error = np.linalg.norm(current_pos - target_pos)
-            total_error += loop_weight * (loop_error ** 2)
-            
-            return total_error
+        def loop_cost(params, frame_id):
+            if frame_id != current_frame_id:
+                return 0.0
 
-        prev_cost = compute_cost()
+            r = params[:3] - target_params[:3]
+            t = params[3:] - target_params[3:]
 
-        # Gradient Descent iterations
-        for iteration in range(max_iterations):
-            for fr in frames_to_optimize:
-                frame_obs = [(X, uv_obs) for X, fid, uv_obs in observations if fid == fr.id]
-                
-                gradient_t = np.zeros(3)
-                epsilon = 1e-7
+            return rot_weight * np.sum(r * r) + trans_weight * np.sum(t * t)
 
-                for axis in range(3):
-                    pose_plus = fr.pose.copy()
-                    pose_plus[axis, 3] += epsilon
-                    pose_minus = fr.pose.copy()
-                    pose_minus[axis, 3] -= epsilon
+        def total_cost(params, obs, frame_id):
+            return self._frame_reprojection_cost(params, obs) + loop_cost(params, frame_id)
 
-                    cost_plus = 0.0
-                    cost_minus = 0.0
+        def numerical_grad(params, obs, frame_id):
+            eps = 1e-5
+            grad = np.zeros_like(params)
 
-                    # Reprojection cost
-                    for X, uv_obs in frame_obs:
-                        uv_proj_plus = self._project_point(pose_plus, X)
-                        uv_proj_minus = self._project_point(pose_minus, X)
-                        if uv_proj_plus is not None:
-                            error_plus = uv_proj_plus - uv_obs
-                            cost_plus += np.sum(error_plus ** 2)
-                        if uv_proj_minus is not None:
-                            error_minus = uv_proj_minus - uv_obs
-                            cost_minus += np.sum(error_minus ** 2)
+            for i in range(len(params)):
+                p1 = params.copy()
+                p2 = params.copy()
 
-                    # Loop closure cost (only for current frame)
-                    if fr.id == current_frame_id:
-                        loop_error_plus = np.linalg.norm(pose_plus[:3, 3] - target_pos)
-                        loop_error_minus = np.linalg.norm(pose_minus[:3, 3] - target_pos)
-                        cost_plus += loop_weight * (loop_error_plus ** 2)
-                        cost_minus += loop_weight * (loop_error_minus ** 2)
+                p1[i] += eps
+                p2[i] -= eps
 
-                    gradient_t[axis] = (cost_plus - cost_minus) / (2 * epsilon)
+                c1 = total_cost(p1, obs, frame_id)
+                c2 = total_cost(p2, obs, frame_id)
 
-                # Gradient Descent update
-                new_translation = fr.pose[:3, 3] - learning_rate * gradient_t
-                movement = np.linalg.norm(new_translation - fr.pose[:3, 3])
-                if movement < 2.0:  # Slightly larger threshold for loop closure
-                    fr.pose[:3, 3] = new_translation
+                grad[i] = (c1 - c2) / (2 * eps)
 
-            current_cost = compute_cost()
-            improvement = prev_cost - current_cost
+            return grad
 
-            if improvement < min_improvement:
-                print(f"  [GD-Loop] Converged after {iteration + 1} iterations. Cost: {current_cost:.2f}")
-                return
+        total_cost_before = 0.0
+        for fr in frames_to_optimize:
+            obs = observations_by_frame[fr.id]
+            if len(obs) < 10:
+                continue
+            params = self._pose_to_params_cw(fr.pose)
+            total_cost_before += total_cost(params, obs, fr.id)
 
-            prev_cost = current_cost
+        changed_any = False
 
-        final_cost = compute_cost()
-        print(f"  [GD-Loop] Finished {max_iterations} iterations. Cost: {final_cost:.2f}")
+        for fr in frames_to_optimize:
+            obs = observations_by_frame[fr.id]
 
+            if len(obs) < 10:
+                continue
+
+            params = self._pose_to_params_cw(fr.pose)
+            lr = base_lr
+            prev_cost = total_cost(params, obs, fr.id)
+
+            for _ in range(max_iterations):
+                grad = numerical_grad(params, obs, fr.id)
+
+                # Gradient clipping
+                grad[:3] = np.clip(grad[:3], -200.0, 200.0)
+                grad[3:] = np.clip(grad[3:], -200.0, 200.0)
+
+                step = lr * grad
+
+                # Step clipping
+                step[:3] = np.clip(step[:3], -5e-2, 5e-2)
+                step[3:] = np.clip(step[3:], -5e-1, 5e-1)
+
+                new_params = params - step
+                new_cost = total_cost(new_params, obs, fr.id)
+
+                if new_cost < prev_cost:
+                    improvement = prev_cost - new_cost
+                    params = new_params
+                    prev_cost = new_cost
+                    changed_any = True
+
+                    if improvement < min_improvement or np.linalg.norm(step) < min_step_norm:
+                        break
+                else:
+                    lr *= 0.5
+                    if lr < 1e-7:
+                        break
+
+            fr.pose = self._params_to_pose_wc(params)
+
+        total_cost_after = 0.0
+        for fr in frames_to_optimize:
+            obs = observations_by_frame[fr.id]
+            if len(obs) < 10:
+                continue
+            params = self._pose_to_params_cw(fr.pose)
+            total_cost_after += total_cost(params, obs, fr.id)
+
+        print(f"  [GD-Loop] Cost before: {total_cost_before:.2f}")
+        print(f"  [GD-Loop] Cost after : {total_cost_after:.2f}")
+
+        if not changed_any:
+            print("  [GD-Loop] Warning: loop optimization made almost no pose updates")
      
     # ---------- Main loop ----------
     def run(self):
@@ -825,7 +953,7 @@ class VisualOdometry:
 
             
             # ---------------- Part 8: Loop Closure Detection ----------------
-            if i % 30 == 0 and i > 150:  # Check every 30 frames, after frame 150
+            if i % 60 == 0 and i > 100:  # Check every 60 frames, after frame 100
                 is_loop, loop_frame_id = self.detect_loop_closure(i, min_frame_gap=100, min_matches=80)
                 
                 if is_loop:
@@ -833,7 +961,6 @@ class VisualOdometry:
                     
                     # Save trajectory BEFORE correction
                     traj_before = np.array([fr.pose[:3, 3].copy() for fr in self.frames])
-                    map_before = self.map.points_array().copy()
                     
                     # Measure drift BEFORE
                     drift_before = np.linalg.norm(traj_before[-1] - traj_before[0])
@@ -849,13 +976,12 @@ class VisualOdometry:
                     print(f"  - Total map points: {len(self.map.points)}")
                     
                     # Run optimization (limited window for speed)
-                    print(f"[LOOP CLOSURE] Running bundle adjustment on frames {loop_frame_id}→{i}...")
-                    self.correct_loop_closure(i, loop_frame_id, window_size=min(150, len(self.frames)))                    
+                    print(f"[LOOP CLOSURE] Running loop-closure pose optimization on frames {loop_frame_id}→{i}...")
+                    self.correct_loop_closure(i, loop_frame_id, window_size=150)                    
                     # Rebuild trajectory AFTER correction
                     self.trajectory = [fr.pose[:3, 3].copy() for fr in self.frames]
                     traj_after = np.array(self.trajectory)
                     did_optimize = True
-                    map_after = self.map.points_array().copy()
                     
                     # Measure drift AFTER
                     drift_after = np.linalg.norm(traj_after[-1] - traj_after[0])
@@ -883,9 +1009,9 @@ class VisualOdometry:
                     print(f"  ✓ Loop closure improvement: {abs(loop_error_after - loop_error_before):.2f} units")
                     print(f"  ✓ Trajectory corrected across {len(self.frames)} frames")
                     print(f"{'='*60}\n")
-            # ---------------- Part 6: reprojection error ----------------
-            # ---------------- Part 6 + Part 7: reprojection error and optimization ----------------
-            # ---------------- Part 6 + Part 7: reprojection error and optimization ----------------
+                    
+            # ---------------- Part 6 + Part 7: reprojection error and optimization 
+            
             if i % 50 == 0 and i > 0:  # Optimize every 50 frames (skip frame 0)
                 rep_before = self.reprojection_error_stats()
                 print(
