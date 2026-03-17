@@ -1,4 +1,4 @@
-# Visual Odometry - Drone Trajectory Estimation
+# Visual Odometry and 3D Reconstruction – Simultaneous Localization and Mapping (SLAM)
 
 ## Team Members
 - Obaida Khateeb, 201278066
@@ -7,7 +7,7 @@
 
 ## Usage
 ```
-python main.py dataset_path [-h] [--matplotlib] [--sift]
+python main.py [dataset_path] [-h] [--matplotlib] [--sift] [--smooth]
 ```
 
 **Default behavior**: ORB, Pangolin, and 50ms delay between frames.
@@ -19,6 +19,7 @@ python main.py dataset_path [-h] [--matplotlib] [--sift]
 - `-h, --help` - Show help message
 - `--sift` - Use SIFT instead of ORB
 - `--matplotlib` - Use matplotlib instead of Pangolin for visualization
+- `--smooth` - Smooth the displayed trajectory (visualization only)
 
 ## Controls
 - **Mouse**: Rotate and zoom the 3D view
