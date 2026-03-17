@@ -13,7 +13,7 @@ class Point:
 class Map:
     def __init__(self):
         self.frames = []
-        self.points = []   # list of Point
+        self.points = []  # list of Point
         self._next_pid = 0
 
     def add_frame(self, frame):
@@ -79,7 +79,7 @@ class Frame:
         self.image = img
         self.keypoints = None
         self.descriptors = None
-        self.pose = np.eye(4) # we treat as Twc (camera -> world)
+        self.pose = np.eye(4)  # we treat as Twc (camera -> world)
         self.rotation_matrix = np.eye(3)
         self.translation_vector = np.zeros((3, 1))
         self.processed = False
@@ -209,7 +209,7 @@ class VisualOdometry:
         P2 = self._build_projection(Twc2)
 
         X_h = cv2.triangulatePoints(P1, P2, pts1.T, pts2.T)  # 4xN
-        X = (X_h[:3, :] / (X_h[3, :] + 1e-12)).T # Nx3
+        X = (X_h[:3, :] / (X_h[3, :] + 1e-12)).T  # Nx3
 
         good = np.all(np.isfinite(X), axis=1)
 
@@ -730,7 +730,7 @@ class VisualOdometry:
 
         for fid in range(start_idx, end_idx + 1):
             alpha = (fid - start_idx + 1) / float(seg_len)
-            alpha = alpha ** 1.5   # stronger near current frame
+            alpha = alpha ** 1.5  # stronger near current frame
 
             # translation correction
             self.frames[fid].pose[:3, 3] += (
@@ -778,10 +778,10 @@ class VisualOdometry:
         total_frames = len(self.images)
 
         # Part 5 params
-        pnp_interval = 5 # every N frames do PnP relocalization
-        min_pnp_corr = 30 # minimum 2D-3D matches to attempt PnP
-        pnp_reproj_err = 4.0 # RANSAC reprojection threshold (pixels)
-        ratio = 0.75 # Lowe ratio
+        pnp_interval = 5  # every N frames do PnP relocalization
+        min_pnp_corr = 30  # minimum 2D-3D matches to attempt PnP
+        pnp_reproj_err = 4.0  # RANSAC reprojection threshold (pixels)
+        ratio = 0.75  # Lowe ratio
 
         # Create a matcher for PnP DB matching
         # (query=current frame, train=map DB)
@@ -1030,10 +1030,13 @@ class VisualOdometry:
 
                             # convert to Twc (camera -> world)
                             frame.pose = np.linalg.inv(Tcw)
-                            print(f"[Frame {i}] PnP relocalization OK: inliers={len(inl)}")
+                            print(
+                                f"[Frame {i}] PnP relocalization OK: "
+                                f"inliers={len(inl)}"
+                            )
 
 
-            #  Part 8: Loop Closure Detection
+            # Part 8: Loop Closure Detection
             if i % 60 == 0 and i > 100:
                 is_loop, loop_frame_id = self.detect_loop_closure(
                     i, min_frame_gap=100, min_matches=80

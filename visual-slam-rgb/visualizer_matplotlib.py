@@ -72,7 +72,7 @@ class MatplotlibVisualizer(BaseVisualizer):
                     self.point_cloud.remove()
                 # We take 500 random points and update them every few
                 # frames because matplotlib gets slow with many points
-                if self.idx is None or frame_num % 20 == 0:
+                if self.idx is None or frame_num % 10 == 0:
                     self.idx = self.rng.choice(
                         points.shape[0],
                         min(500, points.shape[0]),
