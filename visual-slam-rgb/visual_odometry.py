@@ -3,17 +3,17 @@ import numpy as np
 from scipy.signal import savgol_filter
 #from scipy.optimize import least_squares
 
-class Point3D:
+class Point:
     def __init__(self, xyz, pid):
         self.id = pid
         self.xyz = np.asarray(xyz, dtype=float).reshape(3,)
-        self.observations = []  # list of (frame_id, kp_idx)
+        self.frames = []  # list of (frame_id, kp_idx)
 
 
-class Map3D:
+class Map:
     def __init__(self):
         self.frames = []
-        self.points = []   # list of Point3D
+        self.points = []   # list of Point
         self._next_pid = 0
 
     def add_frame(self, frame):
@@ -30,7 +30,7 @@ class Map3D:
             return
 
         for i in range(X_world.shape[0]):
-            self.points.append(Point3D(X_world[i], self._next_pid))
+            self.points.append(Point(X_world[i], self._next_pid))
             self._next_pid += 1
 
     def points_array(self):
@@ -106,7 +106,7 @@ class VisualOdometry:
         self.k = None
         
 
-        self.map = Map3D()
+        self.map = Map()
         # ---------- Part 5: PnP database ----------
         self.map_db_xyz = np.zeros((0, 3), dtype=np.float32)
         self.map_db_des = None
@@ -185,7 +185,7 @@ class VisualOdometry:
         except Exception:
             return traj
 
-    # ---------- Part 4 helpers (must be INSIDE the class) ----------
+    # Part 4 helpers (must be INSIDE the class) 
     def _Tcw_from_Twc(self, Twc: np.ndarray) -> np.ndarray:
         return np.linalg.inv(Twc)
 
@@ -362,6 +362,58 @@ class VisualOdometry:
 
         return grad
     
+    
+    def _animate_loop_correction(self, traj_before, traj_after, frame_id, total_frames, steps=20, delay_ms=35):
+        """
+        Animate the trajectory correction in Pangolin so the fix is clearly visible.
+        """
+        if traj_before.shape != traj_after.shape or traj_before.shape[0] == 0:
+            return
+
+        pts = self.map.points_array()
+
+        for s in range(1, steps + 1):
+            beta = s / float(steps)
+            traj_mid = (1.0 - beta) * traj_before + beta * traj_after
+
+            if self.smooth:
+                traj_vis = self.smooth_traj(traj_mid)
+            else:
+                traj_vis = traj_mid
+
+            self.visualizer.update(traj_vis, pts, frame_id, total_frames)
+            cv2.waitKey(delay_ms)
+
+
+    def _shift_local_map_points(self, start_idx, end_idx, delta_t):
+        """
+        Shift map points that belong mainly to the corrected loop segment,
+        so the Pangolin point cloud also follows the correction visually.
+        """
+        delta_t = np.asarray(delta_t, dtype=float).reshape(3,)
+        seg_len = max(end_idx - start_idx, 1)
+
+        for p in self.map.points:
+            obs_in_window = [fid for fid, _ in p.frames if start_idx <= fid <= end_idx]
+
+            # only move points that are mostly local to the corrected window
+            if len(obs_in_window) == 0:
+                continue
+
+            all_fids = [fid for fid, _ in p.frames]
+            if min(all_fids) < start_idx:
+                continue
+
+            alphas = []
+            for fid in obs_in_window:
+                alpha = (fid - start_idx + 1) / float(seg_len)
+                alpha = alpha ** 1.5
+                alphas.append(alpha)
+
+            mean_alpha = float(np.mean(alphas))
+            p.xyz = p.xyz + mean_alpha * delta_t
+    
+    
     def detect_loop_closure(self, current_frame_id, min_frame_gap=100, min_matches=100):
         """
         Detect if current frame matches a previously visited location.
@@ -369,40 +421,35 @@ class VisualOdometry:
         """
         if current_frame_id < min_frame_gap:
             return False, None
-        
+
         current_frame = self.frames[current_frame_id]
         if current_frame.descriptors is None or len(current_frame.descriptors) < 50:
             return False, None
-        
-        # Search for matches with older frames (skip recent ones to avoid matching nearby frames)
+
+        best_score = -1.0
         best_match_count = 0
         best_match_frame = None
-        
+
         for old_frame_id in range(0, current_frame_id - min_frame_gap, 5):
             old_frame = self.frames[old_frame_id]
             if old_frame.descriptors is None:
                 continue
-            
-            # Match descriptors
+
             try:
                 matches = self.matcher.match(current_frame.descriptors, old_frame.descriptors)
-            except:
+            except Exception:
                 continue
-            
+
             if len(matches) < min_matches:
                 continue
-            
-            # Sort by quality and count good matches
-            good_matches = sorted(matches, key=lambda x: x.distance)[:150]
-            
-            # Basic descriptor quality check
+
+            good_matches = sorted(matches, key=lambda x: x.distance)[:180]
+
             avg_distance = np.mean([m.distance for m in good_matches])
             threshold = 40 if self.use_sift else 25
-
             if avg_distance >= threshold:
                 continue
 
-            # Geometric verification with Essential matrix
             pts_cur = np.float32([
                 current_frame.keypoints[m.queryIdx].pt for m in good_matches
             ]).reshape(-1, 2)
@@ -420,19 +467,27 @@ class VisualOdometry:
                 continue
 
             geom_inliers = int(mask.ravel().sum())
+            inlier_ratio = geom_inliers / max(len(good_matches), 1)
 
-            if geom_inliers > best_match_count:
+            if geom_inliers < min_matches:
+                continue
+            if inlier_ratio < 0.55:
+                continue
+
+            score = geom_inliers * inlier_ratio
+
+            if score > best_score:
+                best_score = score
                 best_match_count = geom_inliers
                 best_match_frame = old_frame_id
-        
-        # Found a good loop closure candidate?
-        if best_match_count >= min_matches:
+
+        if best_match_frame is not None:
             print(f"\n{'='*60}")
             print(f"[LOOP CLOSURE] Frame {current_frame_id} matches Frame {best_match_frame}")
-            print(f"[LOOP CLOSURE] Geometric inliers: {best_match_count}")            
+            print(f"[LOOP CLOSURE] Geometric inliers: {best_match_count}")
             print(f"{'='*60}\n")
             return True, best_match_frame
-        
+
         return False, None
     
     
@@ -442,7 +497,7 @@ class VisualOdometry:
         for p in self.map.points:
             Xw = p.xyz
 
-            for frame_id, kp_idx in p.observations:
+            for frame_id, kp_idx in p.frames:
                 if frame_id < 0 or frame_id >= len(self.frames):
                     continue
 
@@ -457,7 +512,7 @@ class VisualOdometry:
                     continue
 
                 e = np.linalg.norm(uv_proj - uv_obs)
-                if np.isfinite(e):
+                if np.isfinite(e) :
                     errs.append(e)
 
         if len(errs) == 0:
@@ -497,7 +552,7 @@ class VisualOdometry:
             observations_by_frame[fr.id] = []
 
         for p in self.map.points:
-            for fid, kp_idx in p.observations:
+            for fid, kp_idx in p.frames:
                 if fid < start_idx or fid >= total_frames:
                     continue
 
@@ -583,156 +638,97 @@ class VisualOdometry:
 
 
 
-    def correct_loop_closure(self, current_frame_id, loop_frame_id, window_size=150):
+    def correct_loop_closure(self, current_frame_id, loop_frame_id, total_frames, window_size=None, animate=True):
         """
-        Gradient Descent pose-only loop closure optimization.
-        Optimizes rotation + translation for a local window of frames,
-        while encouraging the current frame to align with the matched loop frame.
+            Apply loop closure correction by distributing 
+            the position error across frames in the loop segment.
         """
-        total_frames = len(self.frames)
-        if total_frames < 2:
-            return
+        total_n = len(self.frames)
+        if total_n < 2 or current_frame_id <= loop_frame_id:
+            print("  [Loop] Invalid loop correction range")
+            return False
 
-        start_idx = max(loop_frame_id + 1, current_frame_id - window_size + 1)
-        end_idx = current_frame_id + 1
-        frames_to_optimize = self.frames[start_idx:end_idx]
+        if window_size is None:
+            start_idx = loop_frame_id + 1
+        else:
+            start_idx = max(loop_frame_id + 1, current_frame_id - window_size + 1)
 
-        if len(frames_to_optimize) == 0:
-            print("  [GD-Loop] Skipping: no frames")
-            return
+        end_idx = current_frame_id
+        if start_idx > end_idx:
+            print("  [Loop] Empty correction window")
+            return False
 
-        observations_by_frame = {fr.id: [] for fr in frames_to_optimize}
+        traj_before = np.array([fr.pose[:3, 3].copy() for fr in self.frames], dtype=float)
 
-        for p in self.map.points:
-            for fid, kp_idx in p.observations:
-                if fid < start_idx or fid >= end_idx:
-                    continue
+        loop_pose = self.frames[loop_frame_id].pose.copy()
+        curr_pose = self.frames[current_frame_id].pose.copy()
 
-                fr = self.frames[fid]
-                if fr.keypoints is None or kp_idx < 0 or kp_idx >= len(fr.keypoints):
-                    continue
+        t_loop = loop_pose[:3, 3].copy()
+        t_curr = curr_pose[:3, 3].copy()
 
-                uv = np.array(fr.keypoints[kp_idx].pt, dtype=float)
-                observations_by_frame[fid].append((p.xyz.copy(), uv))
+        delta_t = t_loop - t_curr
+        loop_error_before = float(np.linalg.norm(delta_t))
 
-        total_obs = sum(len(v) for v in observations_by_frame.values())
-        if total_obs < 20:
-            print("  [GD-Loop] Not enough observations")
-            return
+        if loop_error_before < 1e-6:
+            print("  [Loop] Already closed - no correction needed")
+            return False
 
-        print(f"  [GD-Loop] Optimizing {len(frames_to_optimize)} frames")
+        # Rotation correction (mild, for stability)
+        R_loop = loop_pose[:3, :3].copy()
+        R_curr = curr_pose[:3, :3].copy()
+        R_corr = R_loop @ R_curr.T
+        rvec_corr, _ = cv2.Rodrigues(R_corr)
+        rvec_corr = rvec_corr.ravel()
 
-        target_params = self._pose_to_params_cw(self.frames[loop_frame_id].pose)
+        translation_strength = 1.0
+        rotation_strength = 0.35
 
-        max_iterations = 15
-        base_lr = 5e-4
-        rot_weight = 500.0
-        trans_weight = 500.0
-        min_improvement = 1e-4
-        min_step_norm = 1e-6
+        seg_len = max(end_idx - start_idx + 1, 1)
 
-        def loop_cost(params, frame_id):
-            if frame_id != current_frame_id:
-                return 0.0
+        print(f"  [Loop] Applying distributed correction on frames {start_idx} -> {end_idx}")
+        print(f"  [Loop] Loop translation gap before: {loop_error_before:.2f}")
 
-            r = params[:3] - target_params[:3]
-            t = params[3:] - target_params[3:]
+        for fid in range(start_idx, end_idx + 1):
+            alpha = (fid - start_idx + 1) / float(seg_len)
+            alpha = alpha ** 1.5   # stronger near current frame
 
-            return rot_weight * np.sum(r * r) + trans_weight * np.sum(t * t)
+            # translation correction
+            self.frames[fid].pose[:3, 3] += translation_strength * alpha * delta_t
 
-        def total_cost(params, obs, frame_id):
-            return self._frame_reprojection_cost(params, obs) + loop_cost(params, frame_id)
+            # mild rotation correction
+            rvec_step = (rotation_strength * alpha) * rvec_corr
+            R_step, _ = cv2.Rodrigues(rvec_step.reshape(3, 1))
+            self.frames[fid].pose[:3, :3] = R_step @ self.frames[fid].pose[:3, :3]
 
-        def numerical_grad(params, obs, frame_id):
-            eps = 1e-5
-            grad = np.zeros_like(params)
+        # Shift local map points too, so correction is visible in Pangolin
+        self._shift_local_map_points(start_idx, end_idx, translation_strength * delta_t)
 
-            for i in range(len(params)):
-                p1 = params.copy()
-                p2 = params.copy()
+        traj_after = np.array([fr.pose[:3, 3].copy() for fr in self.frames], dtype=float)
+        loop_error_after = float(np.linalg.norm(
+            self.frames[current_frame_id].pose[:3, 3] - self.frames[loop_frame_id].pose[:3, 3]
+        ))
 
-                p1[i] += eps
-                p2[i] -= eps
+        print(f"  [Loop] Loop translation gap after : {loop_error_after:.2f}")
 
-                c1 = total_cost(p1, obs, frame_id)
-                c2 = total_cost(p2, obs, frame_id)
+        if animate:
+            self._animate_loop_correction(
+                traj_before=traj_before,
+                traj_after=traj_after,
+                frame_id=current_frame_id,
+                total_frames=total_frames,
+                steps=20,
+                delay_ms=35
+            )
 
-                grad[i] = (c1 - c2) / (2 * eps)
-
-            return grad
-
-        total_cost_before = 0.0
-        for fr in frames_to_optimize:
-            obs = observations_by_frame[fr.id]
-            if len(obs) < 10:
-                continue
-            params = self._pose_to_params_cw(fr.pose)
-            total_cost_before += total_cost(params, obs, fr.id)
-
-        changed_any = False
-
-        for fr in frames_to_optimize:
-            obs = observations_by_frame[fr.id]
-
-            if len(obs) < 10:
-                continue
-
-            params = self._pose_to_params_cw(fr.pose)
-            lr = base_lr
-            prev_cost = total_cost(params, obs, fr.id)
-
-            for _ in range(max_iterations):
-                grad = numerical_grad(params, obs, fr.id)
-
-                # Gradient clipping
-                grad[:3] = np.clip(grad[:3], -200.0, 200.0)
-                grad[3:] = np.clip(grad[3:], -200.0, 200.0)
-
-                step = lr * grad
-
-                # Step clipping
-                step[:3] = np.clip(step[:3], -5e-2, 5e-2)
-                step[3:] = np.clip(step[3:], -5e-1, 5e-1)
-
-                new_params = params - step
-                new_cost = total_cost(new_params, obs, fr.id)
-
-                if new_cost < prev_cost:
-                    improvement = prev_cost - new_cost
-                    params = new_params
-                    prev_cost = new_cost
-                    changed_any = True
-
-                    if improvement < min_improvement or np.linalg.norm(step) < min_step_norm:
-                        break
-                else:
-                    lr *= 0.5
-                    if lr < 1e-7:
-                        break
-
-            fr.pose = self._params_to_pose_wc(params)
-
-        total_cost_after = 0.0
-        for fr in frames_to_optimize:
-            obs = observations_by_frame[fr.id]
-            if len(obs) < 10:
-                continue
-            params = self._pose_to_params_cw(fr.pose)
-            total_cost_after += total_cost(params, obs, fr.id)
-
-        print(f"  [GD-Loop] Cost before: {total_cost_before:.2f}")
-        print(f"  [GD-Loop] Cost after : {total_cost_after:.2f}")
-
-        if not changed_any:
-            print("  [GD-Loop] Warning: loop optimization made almost no pose updates")
+        return True
      
-    # ---------- Main loop ----------
+    #  Main loop 
     def run(self):
         min_inliers = 20
         max_inlier_median_epipolar_px = 2.0
         total_frames = len(self.images)
 
-        # ---------- Part 5 params ----------
+        # Part 5 params
         pnp_interval = 5              # every N frames do PnP relocalization
         min_pnp_corr = 30             # minimum 2D-3D matches to attempt PnP
         pnp_reproj_err = 4.0          # RANSAC reprojection threshold (pixels)
@@ -873,7 +869,7 @@ class VisualOdometry:
                     frame.pose = self.frames[-2].pose.copy()
                 print(f"[Frame {i}] Rejected: position too extreme ({np.linalg.norm(new_pose[:3, 3]):.2f})")
 
-            # ---------------- Part 4: triangulate + add to map ----------------
+            #  Part 4: triangulate + add to map 
             pts1_in = info.get("pts1_in", None)
             pts2_in = info.get("pts2_in", None)
             inlier_matches = info.get("matches_inliers_all", None)
@@ -887,15 +883,15 @@ class VisualOdometry:
                 if new_pts_world.shape[0] > 0 and inlier_matches is not None:
                     kept_matches = [m for m, keep in zip(inlier_matches, good_mask) if keep]
 
-                    # Add points manually so we also save observations for Part 6
+                    # Add points manually so we also save frames for Part 6
                     for Xw, m in zip(new_pts_world, kept_matches):
-                        pt = Point3D(Xw, self.map._next_pid)
-                        pt.observations.append((prev.id, m.queryIdx))
-                        pt.observations.append((frame.id, m.trainIdx))
+                        pt = Point(Xw, self.map._next_pid)
+                        pt.frames.append((prev.id, m.queryIdx))
+                        pt.frames.append((frame.id, m.trainIdx))
                         self.map.points.append(pt)
                         self.map._next_pid += 1
 
-                    # ---------------- Part 5: update PnP DB correctly ----------------
+                    #  Part 5: update PnP DB correctly 
                     if frame.descriptors is not None:
                         des_in = np.asarray([frame.descriptors[m.trainIdx] for m in kept_matches])
 
@@ -914,7 +910,7 @@ class VisualOdometry:
                         total_pts = self.map.points_array().shape[0]
                         print(f"[Frame {i}] Triangulated={new_pts_world.shape[0]}  MapTotal={total_pts}")
 
-            # ---------------- Part 5: PnP relocalization every N frames ----------------
+            #  Part 5: PnP relocalization every N frames 
             if (i % pnp_interval == 0) and (self.map_db_des is not None) and (self.map_db_xyz.shape[0] >= min_pnp_corr):
                 if frame.descriptors is not None and frame.descriptors.shape[0] > 0:
                     knn = pnp_matcher.knnMatch(frame.descriptors, self.map_db_des, k=2)
@@ -952,65 +948,73 @@ class VisualOdometry:
                             print(f"[Frame {i}] PnP relocalization OK: inliers={len(inl)}")
 
             
-            # ---------------- Part 8: Loop Closure Detection ----------------
-            if i % 60 == 0 and i > 100:  # Check every 60 frames, after frame 100
+            #  Part 8: Loop Closure Detection 
+            if i % 60 == 0 and i > 100:
                 is_loop, loop_frame_id = self.detect_loop_closure(i, min_frame_gap=100, min_matches=80)
-                
+
                 if is_loop:
                     print(f"[LOOP CLOSURE] Saving state before correction...")
-                    
-                    # Save trajectory BEFORE correction
-                    traj_before = np.array([fr.pose[:3, 3].copy() for fr in self.frames])
-                    
-                    # Measure drift BEFORE
+
+                    traj_before = np.array([fr.pose[:3, 3].copy() for fr in self.frames], dtype=float)
                     drift_before = np.linalg.norm(traj_before[-1] - traj_before[0])
-                    
-                    # Calculate loop closure error (distance between matched frames)
                     loop_error_before = np.linalg.norm(
                         self.frames[i].pose[:3, 3] - self.frames[loop_frame_id].pose[:3, 3]
                     )
-                    
-                    print(f"[LOOP CLOSURE] BEFORE optimization:")
+
+                    print(f"[LOOP CLOSURE] BEFORE correction:")
                     print(f"  - Start-to-end drift: {drift_before:.2f} units")
                     print(f"  - Loop closure error (frame {i} ↔ {loop_frame_id}): {loop_error_before:.2f} units")
                     print(f"  - Total map points: {len(self.map.points)}")
-                    
-                    # Run optimization (limited window for speed)
-                    print(f"[LOOP CLOSURE] Running loop-closure pose optimization on frames {loop_frame_id}→{i}...")
-                    self.correct_loop_closure(i, loop_frame_id, window_size=150)                    
-                    # Rebuild trajectory AFTER correction
-                    self.trajectory = [fr.pose[:3, 3].copy() for fr in self.frames]
-                    traj_after = np.array(self.trajectory)
-                    did_optimize = True
-                    
-                    # Measure drift AFTER
-                    drift_after = np.linalg.norm(traj_after[-1] - traj_after[0])
-                    
-                    # Calculate loop closure error AFTER
-                    loop_error_after = np.linalg.norm(
-                        self.frames[i].pose[:3, 3] - self.frames[loop_frame_id].pose[:3, 3]
+
+                    print(f"[LOOP CLOSURE] Running visible trajectory correction on frames {loop_frame_id}→{i}...")
+                    changed = self.correct_loop_closure(
+                        current_frame_id=i,
+                        loop_frame_id=loop_frame_id,
+                        total_frames=total_frames,
+                        window_size=None,   # full loop segment for visible correction
+                        animate=True
                     )
+
+                    if changed:
+                        self.trajectory = [fr.pose[:3, 3].copy() for fr in self.frames]
+                        traj_after = np.array(self.trajectory, dtype=float)
+                        did_optimize = True
+
+                        drift_after = np.linalg.norm(traj_after[-1] - traj_after[0])
+                        loop_error_after = np.linalg.norm(
+                            self.frames[i].pose[:3, 3] - self.frames[loop_frame_id].pose[:3, 3]
+                        )
+
+                        drift_improvement = ((drift_before - drift_after) / drift_before * 100.0) if drift_before > 0 else 0.0
+                        loop_improvement = ((loop_error_before - loop_error_after) / loop_error_before * 100.0) if loop_error_before > 0 else 0.0
+                        traj_change = np.mean(np.linalg.norm(traj_after - traj_before, axis=1))
+
+                        print(f"\n[LOOP CLOSURE] AFTER correction:")
+                        print(f"  - Start-to-end drift: {drift_after:.2f} units (Δ {drift_improvement:+.1f}%)")
+                        print(f"  - Loop closure error: {loop_error_after:.2f} units (Δ {loop_improvement:+.1f}%)")
+                        print(f"  - Average trajectory shift: {traj_change:.2f} units")
+                        print(f"  - Total map points: {len(self.map.points)}")
+
+                        print(f"\n[LOOP CLOSURE] EFFECT SUMMARY:")
+
+                        drift_delta = drift_after - drift_before
+                        if drift_delta < 0:
+                            print(f"  ✓ Drift reduced by {-drift_delta:.2f} units")
+                        else:
+                            print(f"  ✗ Drift increased by {drift_delta:.2f} units")
+
+                        loop_delta = loop_error_after - loop_error_before
+                        if loop_delta < 0:
+                            print(f"  ✓ Loop closure error reduced by {-loop_delta:.2f} units")
+                        else:
+                            print(f"  ✗ Loop closure error increased by {loop_delta:.2f} units")
+
+                        print(f"  ✓ Trajectory corrected across {len(self.frames)} frames")
+                        print(f"{'='*60}\n")
+                    else:
+                        print("[LOOP CLOSURE] Correction skipped or had no visible effect")
                     
-                    # Calculate improvements
-                    drift_improvement = ((drift_before - drift_after) / drift_before * 100) if drift_before > 0 else 0
-                    loop_improvement = ((loop_error_before - loop_error_after) / loop_error_before * 100) if loop_error_before > 0 else 0
-                    
-                    # Calculate trajectory change magnitude
-                    traj_change = np.mean(np.linalg.norm(traj_after - traj_before, axis=1))
-                    
-                    print(f"\n[LOOP CLOSURE] AFTER optimization:")
-                    print(f"  - Start-to-end drift: {drift_after:.2f} units (Δ {drift_improvement:+.1f}%)")
-                    print(f"  - Loop closure error: {loop_error_after:.2f} units (Δ {loop_improvement:+.1f}%)")
-                    print(f"  - Average trajectory shift: {traj_change:.2f} units")
-                    print(f"  - Total map points: {len(self.map.points)}")
-                    
-                    print(f"\n[LOOP CLOSURE] EFFECT SUMMARY:")
-                    print(f"  ✓ Drift reduction: {abs(drift_after - drift_before):.2f} units")
-                    print(f"  ✓ Loop closure improvement: {abs(loop_error_after - loop_error_before):.2f} units")
-                    print(f"  ✓ Trajectory corrected across {len(self.frames)} frames")
-                    print(f"{'='*60}\n")
-                    
-            # ---------------- Part 6 + Part 7: reprojection error and optimization 
+            # Part 6 + Part 7: reprojection error and optimization 
             
             if i % 50 == 0 and i > 0:  # Optimize every 50 frames (skip frame 0)
                 rep_before = self.reprojection_error_stats()
@@ -1032,7 +1036,6 @@ class VisualOdometry:
                         f"rmse={rep_after['rmse']:.2f} p95={rep_after['p95']:.2f}"
                     )
 
-           # ---------------- trajectory / visualization ----------------
             # Only rebuild trajectory after optimization, otherwise just update current position
             if did_optimize:
                 # Just optimized - rebuild entire trajectory from updated poses
