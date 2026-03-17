@@ -32,9 +32,15 @@ class MatplotlibVisualizer(BaseVisualizer):
         self.ax.yaxis.pane.fill = False
         self.ax.zaxis.pane.fill = False
 
+        self.point_cloud = None
+
+        self.idx = None
+        self.rng = np.random.default_rng(42)
+
     def update(
         self,
         traj: np.ndarray,
+        points=None,
         frame_num=0,
         total_frames=0,
     ):
@@ -55,6 +61,22 @@ class MatplotlibVisualizer(BaseVisualizer):
             traj[-1, 0], traj[-1, 1], traj[-1, 2],
             c="r", s=60
         )
+
+        if points is not None:
+            points = np.asarray(points, dtype=float).reshape(-1, 3)
+            if points.shape[0] > 0:
+                if self.point_cloud is not None:
+                    self.point_cloud.remove()
+                # we take 500 random points and update them every few frames 
+                # because matplotlib gets slow with many points
+                if self.idx is None or frame_num % 20 == 0:
+                    self.idx = self.rng.choice(points.shape[0], min(500, points.shape[0]), replace=False)
+
+                self.point_cloud = self.ax.scatter(
+                    points[self.idx, 0], points[self.idx, 1], points[self.idx, 2],
+                    c="cyan", s=1, alpha=0.4
+                )
+
         self.ax.set_title(
             f"Estimated Trajectory "
             f"(Frame: {frame_num}/{total_frames})",
