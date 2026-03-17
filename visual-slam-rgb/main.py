@@ -7,12 +7,14 @@ Students:
 - Lama Hammoud - 324839984
 """
 
-import glob
 import argparse
+import glob
 import os
+
 from visual_odometry import VisualOdometry
 from visualizer_matplotlib import MatplotlibVisualizer
 from visualizer import PangolinVisualizer
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -36,7 +38,7 @@ if __name__ == "__main__":
             "Kept optional to avoid hiding estimation and optimization effects."
         ),
     )
-    
+
     args = parser.parse_args()
 
     if args.image_dir is None:

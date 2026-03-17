@@ -2,7 +2,6 @@ import numpy as np
 from visualizer import BaseVisualizer
 
 
-
 class MatplotlibVisualizer(BaseVisualizer):
     def __init__(self):
         import matplotlib.pyplot as plt
@@ -13,11 +12,15 @@ class MatplotlibVisualizer(BaseVisualizer):
         self.ax = self.fig.add_subplot(111, projection="3d")
         self.fig.patch.set_facecolor("black")
         self.line, = self.ax.plot(
-            [], [], [], "y-", linewidth=2
+            [],
+            [],
+            [],
+            "y-",
+            linewidth=2,
         )
         self.start = None
         self.end = None
- 
+
         self.ax.set_facecolor("black")
         self.ax.set_xlabel("X (right)", color="white")
         self.ax.set_ylabel("Y (up)", color="white")
@@ -67,13 +70,19 @@ class MatplotlibVisualizer(BaseVisualizer):
             if points.shape[0] > 0:
                 if self.point_cloud is not None:
                     self.point_cloud.remove()
-                # we take 500 random points and update them every few frames 
-                # because matplotlib gets slow with many points
+                # We take 500 random points and update them every few
+                # frames because matplotlib gets slow with many points
                 if self.idx is None or frame_num % 20 == 0:
-                    self.idx = self.rng.choice(points.shape[0], min(500, points.shape[0]), replace=False)
+                    self.idx = self.rng.choice(
+                        points.shape[0],
+                        min(500, points.shape[0]),
+                        replace=False
+                    )
 
                 self.point_cloud = self.ax.scatter(
-                    points[self.idx, 0], points[self.idx, 1], points[self.idx, 2],
+                    points[self.idx, 0],
+                    points[self.idx, 1],
+                    points[self.idx, 2],
                     c="cyan", s=1, alpha=0.4
                 )
 

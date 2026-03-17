@@ -43,7 +43,7 @@ class PangolinVisualizer(BaseVisualizer):
         self.d_cam.SetHandler(self.handler)
 
     def update(
-        self, 
+        self,
         traj: np.ndarray,
         points=None,
         frame_num=0,
@@ -69,7 +69,7 @@ class PangolinVisualizer(BaseVisualizer):
             for p in traj:
                 gl.glVertex3f(float(p[0]), float(p[1]), float(p[2]))
             gl.glEnd()
-            
+
         # Draw point cloud (Part 4)
         if points is not None:
             points = np.asarray(points, dtype=float).reshape(-1, 3)
@@ -113,7 +113,6 @@ class PangolinVisualizer(BaseVisualizer):
                 center[0], center[1], center[2]
             )
         )
-
 
     def draw_grid_and_axes(self):
         gl = self.gl
